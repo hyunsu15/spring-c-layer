@@ -1,0 +1,29 @@
+// 선택 사항: Gradle이나 IntelliJ로 열 때 사용. run.ps1은 이 파일 없이도 동작한다.
+plugins {
+    id 'java'
+    id 'application'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.springframework:spring-context:6.2.6'
+    implementation 'org.springframework:spring-jdbc:6.2.6'
+    implementation 'org.mybatis:mybatis:3.5.16'
+    implementation 'org.mybatis:mybatis-spring:3.0.4'
+    implementation 'com.h2database:h2:2.3.232'
+    implementation 'org.slf4j:slf4j-api:2.0.16'
+    runtimeOnly 'org.slf4j:slf4j-simple:2.0.16'
+}
+
+application {
+    mainClass = 'com.example.repofacade.demo.DemoMain'
+}
