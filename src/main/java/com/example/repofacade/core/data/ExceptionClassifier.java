@@ -1,9 +1,10 @@
 package com.example.repofacade.core.data;
 
-import org.apache.ibatis.exceptions.PersistenceException;
-import org.apache.ibatis.exceptions.TooManyResultsException;
+import java.util.List;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -19,11 +20,20 @@ import org.springframework.stereotype.Component;
  * 원칙: 데이터가 원인인 실패만 DataResultWrapper로 바꾸고,
  * 코드가 원인인 실패(NPE, 매핑 누락 등 비-데이터접근 예외)는 그대로 던진다
  * — 복구 대상이 아니라 고칠 버그이기 때문.
+ *
+ * 여기에는 스프링 DataAccessException 계층(기술 무관) 규칙만 둔다.
+ * MyBatis 등 기술별 규칙은 {@link DataExceptionRule} 빈으로 붙는다 (core.data.mybatis 참고).
  */
 @Component
 public class ExceptionClassifier {
 
     private static final Logger log = LoggerFactory.getLogger(ExceptionClassifier.class);
+
+    private final List<DataExceptionRule> rules;
+
+    public ExceptionClassifier(ObjectProvider<DataExceptionRule> rules) {
+        this.rules = rules.orderedStream().toList();
+    }
 
     /** 분류 가능하면 실패 DataResultWrapper를 반환하고, 아니면 원래 예외를 다시 던진다. */
     public <T> DataResultWrapper<T> toResult(RuntimeException e) {
@@ -40,16 +50,19 @@ public class ExceptionClassifier {
     }
 
     private DataResultStatus statusOf(RuntimeException e) {
-        // TooManyResults는 MyBatisSystemException 등에 감싸여 오므로 cause 체인으로 판별
-        //해당값은 표준화 예외를 던지면 이거 필요없음. 해야하면 이거 필요함.
-        if (hasCause(e, TooManyResultsException.class)) {
-            return DataResultStatus.SQLOVF;
+        // 기술별 규칙 먼저 — 래핑된 예외를 아래 일반 규칙이 SYSTEM_ERROR로 뭉개기 전에 판별
+        for (DataExceptionRule rule : rules) {
+            DataResultStatus status = rule.classify(e);
+            if (status != null) {
+                return status;
+            }
+        }
+        // EmptyResult는 IncorrectResultSize의 하위 타입이라 먼저 봐야 한다 (아니면 0건이 SQLOVF가 된다)
+        if (e instanceof EmptyResultDataAccessException) {
+            return DataResultStatus.SQL_NO_DATA;
         }
         if (e instanceof IncorrectResultSizeDataAccessException) {
             return DataResultStatus.SQLOVF;
-        }
-        if (e instanceof EmptyResultDataAccessException) {
-            return DataResultStatus.SQL_NO_DATA;
         }
         if (e instanceof DuplicateKeyException) {
             return DataResultStatus.SQLDUP;
@@ -62,19 +75,10 @@ public class ExceptionClassifier {
                 || e instanceof RecoverableDataAccessException) {
             return DataResultStatus.SQLDISCON;
         }
-        if (e instanceof DataAccessException || e instanceof PersistenceException) {
+        if (e instanceof DataAccessException) {
             return DataResultStatus.SYSTEM_ERROR;
         }
         return null;
-    }
-
-    private boolean hasCause(Throwable e, Class<? extends Throwable> type) {
-        for (Throwable t = e; t != null && t.getCause() != t; t = t.getCause()) {
-            if (type.isInstance(t)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private String rootMessage(Throwable e) {

@@ -12,8 +12,6 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.datasource.init.ScriptUtils;
 
-import com.example.repofacade.core.data.RepoFacadeRegistrar;
-
 @Configuration(proxyBeanMethods = false)
 @ComponentScan(basePackages = "com.example.repofacade")
 @MapperScan(basePackages = "com.example.repofacade.demo",
@@ -42,9 +40,6 @@ public class AppConfig {
         return factory.getObject();
     }
 
-    /** BeanFactoryPostProcessor는 static @Bean으로 등록해야 설정 클래스 초기화보다 먼저 안전하게 뜬다. */
-    @Bean
-    public static RepoFacadeRegistrar repoFacadeRegistrar() {
-        return new RepoFacadeRegistrar();
-    }
+    // 파사드 등록기는 따로 선언하지 않는다 — 컴포넌트 스캔이 core.data.mybatis의
+    // MyBatisRepoFacadeConfiguration을 잡아서, MyBatis가 클래스패스에 있으면 자동으로 붙는다.
 }

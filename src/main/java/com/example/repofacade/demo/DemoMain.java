@@ -6,6 +6,8 @@ import java.util.List;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.core.ResolvableType;
 
+import com.example.repofacade.core.ResultStatus;
+import com.example.repofacade.core.ResultWrapper;
 import com.example.repofacade.core.data.RepoFacade;
 import com.example.repofacade.core.data.DataResultWrapper;
 import com.example.repofacade.core.data.DataResultStatus;
@@ -77,6 +79,10 @@ public class DemoMain {
             DataResultWrapper<List<OrderRow>> all = orders.many(m -> m.selectAll());
             check("목록 조회 3건", all.ok() && all.value().size() == 3);
 
+            // 5-1. 목록이 비면 예외 없이 SQL_NO_DATA (단건 조회와 같은 규칙)
+            DataResultWrapper<List<OrderRow>> none = orders.many(m -> m.selectByStatus("CANCELLED"));
+            check("빈 목록은 SQL_NO_DATA(rc=10)", none.fail() && none.status() == DataResultStatus.SQL_NO_DATA);
+
             // 6. C 스타일 사용감
             DataResultWrapper<OrderRow> r = service.find(2);
             if (r.fail()) {
@@ -96,6 +102,25 @@ public class DemoMain {
             DataResultWrapper<BigDecimal> total = service.totalAmount();
             check("전체 금액 합계 40000.50", total.ok()
                     && new BigDecimal("40000.50").compareTo(total.value()) == 0);
+
+            // 8. 상태 비교는 == — 성공은 하나뿐
+            check("성공은 하나 — 데이터 계층 결과도 ok()이고 == SUCCESS",
+                    found.ok() && found.status() == ResultStatus.SUCCESS);
+
+            // 8-1. 코드표가 실수로 성공 번호(0)를 써도 성공이 되지 않고, 결과에 담는 순간 막힌다
+            boolean rejected;
+            try {
+                ResultWrapper.fail(TypoStatus.OOPS, "번호 실수");
+                rejected = false;
+            } catch (IllegalArgumentException e) {
+                rejected = true;
+            }
+            check("번호 0을 쓴 실패 상태: ok() 아님 + 결과 생성 거부", !TypoStatus.OOPS.ok() && rejected);
+
+            // 9. 데이터 실패를 일반 결과로 rc·이름 그대로 전파
+            ResultWrapper<OrderRow> lifted = ResultWrapper.fail(missing.status(), missing.detail());
+            check("일반 결과로 전파해도 == SQL_NO_DATA",
+                    lifted.status() == DataResultStatus.SQL_NO_DATA);
         }
 
         System.out.println();
@@ -104,6 +129,22 @@ public class DemoMain {
         } else {
             System.out.println(failures + "개 시나리오 실패");
             System.exit(1);
+        }
+    }
+
+    /** 성공 번호(0)를 실수로 쓴 코드표 — 8-1 시나리오용. */
+    private enum TypoStatus implements ResultStatus {
+        OOPS(0);
+
+        private final int code;
+
+        TypoStatus(int code) {
+            this.code = code;
+        }
+
+        @Override
+        public int code() {
+            return code;
         }
     }
 

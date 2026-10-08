@@ -33,7 +33,9 @@ public class DefaultRepoFacade<M> implements RepoFacade<M> {
     public <R> DataResultWrapper<List<R>> many(Function<M, List<R>> query) {
         return call(() -> {
             List<R> rows = query.apply(mapper);
-            return DataResultWrapper.ok(rows == null ? List.<R>of() : rows);
+            return rows == null || rows.isEmpty()
+                    ? DataResultWrapper.fail(DataResultStatus.SQL_NO_DATA, "조회 결과 없음")
+                    : DataResultWrapper.ok(rows);
         });
     }
 

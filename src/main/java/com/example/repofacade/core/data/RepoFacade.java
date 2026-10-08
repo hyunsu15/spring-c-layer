@@ -20,7 +20,11 @@ public interface RepoFacade<M> {
     /** 단건 조회. 결과가 null이면 SQL_NO_DATA. */
     <R> DataResultWrapper<R> one(Function<M, R> query);
 
-    /** 목록 조회. null은 빈 목록으로 취급. */
+    /**
+     * 목록 조회. 결과가 비었거나 null이면 SQL_NO_DATA — 단건 조회와 같은 규칙(C의 NOT FOUND).
+     * 0건도 정상인 호출부는 {@code r.status() == DataResultStatus.SQL_NO_DATA}로 따로 분기한다
+     * ({@code valueOr(List.of())}는 연결 장애 같은 진짜 실패까지 빈 목록으로 삼키므로 쓰지 말 것).
+     */
     <R> DataResultWrapper<List<R>> many(Function<M, List<R>> query);
 
     /** 나중에 필요할때 사용하기. 아직은 필요없을듯?

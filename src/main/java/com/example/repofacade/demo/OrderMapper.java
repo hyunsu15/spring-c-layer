@@ -19,6 +19,9 @@ public interface OrderMapper {
     @Select("SELECT id, customer_name, amount, status FROM orders ORDER BY id")
     List<OrderRow> selectAll();
 
+    @Select("SELECT id, customer_name, amount, status FROM orders WHERE status = #{status} ORDER BY id")
+    List<OrderRow> selectByStatus(String status);
+
     @Insert("INSERT INTO orders (id, customer_name, amount, status) "
             + "VALUES (#{id}, #{customerName}, #{amount}, #{status})")
     int insert(OrderRow row);

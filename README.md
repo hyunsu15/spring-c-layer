@@ -13,27 +13,40 @@ powershell -ExecutionPolicy Bypass -File run.ps1
 ```
 
 - 첫 실행 시 Maven Central에서 의존성 jar 13개를 `lib/`에 내려받는다 (약 12MB).
-- 이후 컴파일 → 데모 시나리오 7종 실행. 전부 통과하면 종료 코드 0.
+- 이후 컴파일 → 데모 시나리오 9종 실행. 전부 통과하면 종료 코드 0.
 - IntelliJ로 열려면 이 폴더를 Gradle 프로젝트로 import (`build.gradle` 있음).
 
 ## 구조
 
 ```
-core/data/  (프레임워크 — 그대로 재사용 가능)
+core/  (계층 공통 — 프레임워크 무관)
+  ResultStatus.java          rc 상태 인터페이스 + SUCCESS/FAIL. 도메인이 enum으로 코드표를 더한다. 비교는 ==
+  CommonResultStatus.java    SUCCESS/FAIL의 실체 enum (패키지 내부)
+  ResultWrapper.java         일반 결과 (rc + 값)
+
+core/data/  (데이터 계층 — 기술 무관, 그대로 재사용 가능)
   DataResultWrapper.java   rc + 값. 실패 결과의 value() 접근은 그 자리에서 터진다
-  DataResultStatus.java    rc 코드표 — C 레거시 코드명 (SUCCESS=0, SQL_NO_DATA=10,
+  DataResultStatus.java    rc 실패 코드표 — C 레거시 코드명 (SQL_NO_DATA=10,
                            SQLOVF=11, SQLDUP=20, SQLNULL=21, SQLDISCON=30, SYSTEM_ERROR=99)
+                           ResultStatus 구현 (성공은 ResultStatus.SUCCESS를 쓴다)
   RepoFacade.java          one / many — 매퍼 호출을 DataResultWrapper로 감싸는 인터페이스
                            (쓰기용 exec는 아직 불필요해 주석 처리 — 필요 시 해제)
   DefaultRepoFacade.java   공용 제네릭 구현체 (SimpleJpaRepository와 같은 자리)
-  ExceptionClassifier.java 데이터 접근 예외 → DataResultStatus 분류 (버그성 예외는 다시 던짐)
-  RepoFacadeRegistrar.java 매퍼 정의를 스캔해 파사드 빈 정의를 양산하는 등록기
+  ExceptionClassifier.java 스프링 DataAccessException → DataResultStatus 분류 (버그성 예외는 다시 던짐)
+  DataExceptionRule.java   기술별 예외 규칙 확장점 — 빈으로 등록하면 일반 규칙보다 먼저 적용
+  AbstractRepoFacadeRegistrar.java  매퍼 정의마다 파사드 빈 정의를 양산하는 등록기 뼈대
+
+core/data/mybatis/  (MyBatis + mybatis-spring이 클래스패스에 있을 때만 활성)
+  MyBatisRepoFacadeConfiguration.java  조건부 설정 — 아래 두 빈을 등록
+  MyBatisPresentCondition.java         활성 조건 (스프링 부트 @ConditionalOnClass 대용)
+  MyBatisRepoFacadeRegistrar.java      MapperFactoryBean 정의에서 매퍼 타입 추출
+  MyBatisExceptionRule.java            TooManyResults(래핑됨) → SQLOVF, 미변환 PersistenceException → SYSTEM_ERROR
 
 demo/  (사용 예시)
   OrderMapper.java         평범한 @Mapper 인터페이스 — 파사드는 이걸 건드리지 않는다
   OrderRow.java            테이블 모양의 Row 객체
   OrderService.java        파사드를 쓰는 서비스 예시 — 주입, rc 분기, 실패 전파, 집계
-  AppConfig.java           H2 + MyBatis + 등록기 조립
+  AppConfig.java           H2 + MyBatis 조립 (파사드 등록기는 스캔으로 자동)
   DemoMain.java            시나리오 검증 (실행 진입점)
 ```
 
@@ -54,6 +67,26 @@ OrderRow row = r.value();
 ```
 
 ## 설계 결정 요약
+
+- **상태 비교는 `==`로 한다.** `if (r.status() == DataResultStatus.SQL_NO_DATA)`. 성공 여부는 `ok()` / `fail()`.
+  상태는 전부 enum 상수라 `==`가 JVM 차원에서 보장된다. 규칙은 둘:
+  코드표는 **enum으로만** 만들고, 코드표에 **SUCCESS를 두지 않는다** (성공은 `ResultStatus.SUCCESS` 하나뿐).
+  인터페이스 상수가 상속되어 `DataResultStatus.SUCCESS`처럼도 접근은 되지만 **쓰지 않는다** — 코드표의 상수처럼
+  보여 헷갈린다. 성공 판단은 `r.ok()`, 직접 부를 땐 `ResultStatus.SUCCESS`.
+  (IntelliJ의 "Static field referenced via subclass" 검사를 켜 두면 이런 접근에 경고가 뜬다.)
+- **성공 여부는 번호가 아니라 정체로 판단한다.** `ok()`는 `this == ResultStatus.SUCCESS`다 — `code() == 0`이 아니다.
+  다른 코드표가 우연히 0을 써도 성공이 되지 않고, 번호 체계가 바뀌면(예: 200) `CommonResultStatus.SUCCESS`의
+  번호 한 줄만 고치면 된다. 반대로 성공 번호를 쓰는 실패 상태는 결과 객체 생성 시 거부된다
+  (C 쪽은 rc만 보고 성공으로 읽으므로). 성공 종류가 여러 개 필요해지면 번호 대역(2xx)이 아니라
+  상수별 성공 여부 선언으로 확장한다.
+- **rc 코드 대역.** 0~99는 공통·데이터 계층(SUCCESS=0, FAIL=1, DataResultStatus 10~99), 도메인 코드표는 100 이상.
+  코드가 겹쳐도 `==` 비교는 틀리지 않지만 C 쪽으로 내보내는 rc가 모호해지므로 대역을 지킨다.
+- **도메인 코드표 추가 방법.** `enum XxxResultStatus implements ResultStatus`에 `code()`만 구현하면 끝. 등록 절차 없음.
+- **목록이 비면 SQL_NO_DATA.** `many()`도 `one()`과 같은 규칙 (C의 NOT FOUND). 0건이 정상인 호출부는
+  `r.status() == SQL_NO_DATA`로 따로 분기한다 — `valueOr(List.of())`는 연결 장애까지 삼키므로 쓰지 않는다.
+- **MyBatis 연동은 조건부다.** core.data는 스프링 DAO 예외 계층만 알고, MyBatis 고유 처리는
+  core.data.mybatis에 모여 있다. MyBatis가 없으면 그 패키지는 통째로 비활성 (조건은 클래스 로드 전에 판정).
+  다른 기술(JPA 등)을 붙일 때는 `AbstractRepoFacadeRegistrar` + `DataExceptionRule`을 구현한다.
 
 - **rc는 enum이 원본, int는 파생.** `DataResultStatus`가 원본이고 `code()`가 숫자를 파생시킨다.
   분기는 `ok()` / `fail()`로 하고, 숫자 rc가 필요하면 `status().code()`로 꺼낸다
