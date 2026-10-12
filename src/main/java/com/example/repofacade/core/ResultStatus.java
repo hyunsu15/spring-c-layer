@@ -18,23 +18,19 @@ package com.example.repofacade.core;
  * <p><b>비교는 {@code ==}로 한다.</b> 규칙 두 가지만 지키면 항상 맞다.
  * <ul>
  *   <li><b>코드표는 enum으로만 만든다.</b> enum 상수는 JVM에 하나뿐이라 {@code ==}가 보장된다.</li>
- *   <li><b>코드표에 SUCCESS를 두지 않는다.</b> 성공은 {@link #SUCCESS} 하나뿐이다.
- *       (인터페이스 상수라 {@code OrderResultStatus.SUCCESS}로도 접근은 되지만 쓰지 말 것 — 코드표의 상수처럼 보여 헷갈린다.
- *       성공 판단은 {@code r.ok()}, 직접 부를 땐 {@code ResultStatus.SUCCESS}.)</li>
+ *   <li><b>코드표에 SUCCESS를 두지 않는다.</b> 성공은 {@link CommonResultStatus#SUCCESS} 하나뿐이다.</li>
  * </ul>
  * {@code if (r.status() == OrderResultStatus.ALREADY_PAID)}, 성공 여부는 {@code r.ok()} / {@code r.fail()}.
  *
  * <p>rc 대역: 0~99는 공통·데이터 계층(SUCCESS=0, FAIL=1, DataResultStatus 10~99), 도메인 코드표는 100 이상.
  * 코드가 겹쳐도 {@code ==} 비교는 틀리지 않지만, C 쪽으로 내보내는 rc가 모호해지므로 대역을 지킨다.
  * 단, 성공 번호를 쓰는 실패 상태는 결과 객체가 거부한다 — C가 rc만 보고 성공으로 읽기 때문이다.
+ *
+ * <p>이 인터페이스에 SUCCESS 같은 상수를 두지 않는 이유: 상수를 구현체(CommonResultStatus)에서 가져와 초기화하면,
+ * default 메서드가 있는 인터페이스 특성상 구현체가 먼저 초기화될 때 상수가 영구히 null이 된다(클래스 초기화 순환).
+ * 그래서 상수는 CommonResultStatus에만 두고, 여기서는 메서드 안에서만 참조한다.
  */
 public interface ResultStatus {
-
-    /** 유일한 성공 상태. */
-    ResultStatus SUCCESS = CommonResultStatus.SUCCESS;
-
-    /** 사유를 따로 구분하지 않는 일반 실패. */
-    ResultStatus FAIL = CommonResultStatus.FAIL;
 
     /** C 스타일 분기(if rc != 0)를 위한 숫자 코드. */
     int code();
@@ -47,7 +43,7 @@ public interface ResultStatus {
      * 번호 체계가 바뀌어도 SUCCESS의 번호 한 줄만 고치면 된다.
      */
     default boolean ok() {
-        return this == SUCCESS;
+        return this == CommonResultStatus.SUCCESS;
     }
 
     default boolean fail() {

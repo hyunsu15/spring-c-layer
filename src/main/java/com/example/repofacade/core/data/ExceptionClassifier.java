@@ -1,5 +1,11 @@
 package com.example.repofacade.core.data;
 
+import static com.example.repofacade.core.data.DataExceptionRule.hasCause;
+
+import java.sql.SQLException;
+import java.sql.SQLNonTransientConnectionException;
+import java.sql.SQLRecoverableException;
+import java.sql.SQLTransientConnectionException;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -11,15 +17,17 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.dao.IncorrectResultSizeDataAccessException;
+import org.springframework.dao.InvalidDataAccessApiUsageException;
+import org.springframework.dao.InvalidDataAccessResourceUsageException;
 import org.springframework.dao.RecoverableDataAccessException;
 import org.springframework.stereotype.Component;
 
 /**
  * 데이터 접근 예외 → DataResultStatus 분류.
  *
- * 원칙: 데이터가 원인인 실패만 DataResultWrapper로 바꾸고,
- * 코드가 원인인 실패(NPE, 매핑 누락 등 비-데이터접근 예외)는 그대로 던진다
- * — 복구 대상이 아니라 고칠 버그이기 때문.
+ * 원칙: C가 rc로 받던 것 — 데이터 상태(0건, 중복 등)와 DB 장애(연결 단절 등) — 만 DataResultWrapper로 바꾸고,
+ * 코드가 원인인 실패(잘못된 SQL, 매핑 누락, 파라미터·결과 매핑 오류, NPE 등)는 그대로 던진다.
+ * 이런 실패는 레거시에 없던, 전환하며 생긴 버그다. rc로 바꾸면 "조회오류도 정상 진행" 같은 레거시 분기에 묻힌다.
  *
  * 여기에는 스프링 DataAccessException 계층(기술 무관) 규칙만 둔다.
  * MyBatis 등 기술별 규칙은 {@link DataExceptionRule} 빈으로 붙는다 (core.data.mybatis 참고).
@@ -35,7 +43,7 @@ public class ExceptionClassifier {
         this.rules = rules.orderedStream().toList();
     }
 
-    /** 분류 가능하면 실패 DataResultWrapper를 반환하고, 아니면 원래 예외를 다시 던진다. */
+    /** 분류 가능하면 실패 DataResultWrapper를 반환하고, 아니면(버그 포함) 원래 예외를 다시 던진다. */
     public <T> DataResultWrapper<T> toResult(RuntimeException e) {
         DataResultStatus status = statusOf(e);
         if (status == null) {
@@ -50,6 +58,10 @@ public class ExceptionClassifier {
     }
 
     private DataResultStatus statusOf(RuntimeException e) {
+        // 버그 판정이 먼저 — 아래 규칙들(특히 마지막 SYSTEM_ERROR)이 버그를 rc로 바꾸기 전에 걸러낸다
+        if (isCodeBug(e)) {
+            return null;
+        }
         // 기술별 규칙 먼저 — 래핑된 예외를 아래 일반 규칙이 SYSTEM_ERROR로 뭉개기 전에 판별
         for (DataExceptionRule rule : rules) {
             DataResultStatus status = rule.classify(e);
@@ -70,15 +82,40 @@ public class ExceptionClassifier {
         if (e instanceof DataIntegrityViolationException) {
             return DataResultStatus.SQLNULL;
         }
-        // 연결 획득 실패(CannotGetJdbcConnection 등) 또는 작업 중 연결 끊김
-        if (e instanceof DataAccessResourceFailureException
-                || e instanceof RecoverableDataAccessException) {
+        if (isConnectionFailure(e)) {
             return DataResultStatus.SQLDISCON;
         }
-        if (e instanceof DataAccessException) {
+        // 그 외 DB가 돌려준 오류 (스프링 변환을 거치지 않고 SQLException을 품은 예외 포함)
+        if (e instanceof DataAccessException || hasCause(e, SQLException.class)) {
             return DataResultStatus.SYSTEM_ERROR;
         }
         return null;
+    }
+
+    /**
+     * 고칠 대상(코드 버그)인가. 기술별 규칙의 판정 + 스프링 공통 규칙:
+     * 잘못된 SQL(BadSqlGrammarException, 하위 타입 TypeMismatch 등 포함)과 API 오용.
+     */
+    private boolean isCodeBug(RuntimeException e) {
+        for (DataExceptionRule rule : rules) {
+            if (rule.isCodeBug(e)) {
+                return true;
+            }
+        }
+        return e instanceof InvalidDataAccessResourceUsageException
+                || e instanceof InvalidDataAccessApiUsageException;
+    }
+
+    /**
+     * 연결 획득 실패 또는 작업 중 연결 끊김. 타입이 아니라 cause 체인으로 본다
+     * — MyBatis는 연결 획득 실패(CannotGetJdbcConnectionException)를 MyBatisSystemException으로 감싸서 던진다.
+     */
+    private boolean isConnectionFailure(Throwable e) {
+        return hasCause(e, DataAccessResourceFailureException.class)    // CannotGetJdbcConnectionException 포함
+                || hasCause(e, RecoverableDataAccessException.class)
+                || hasCause(e, SQLTransientConnectionException.class)     // 커넥션 풀 대기 시간 초과 등
+                || hasCause(e, SQLNonTransientConnectionException.class)
+                || hasCause(e, SQLRecoverableException.class);
     }
 
     private String rootMessage(Throwable e) {

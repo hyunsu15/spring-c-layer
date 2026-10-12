@@ -9,9 +9,7 @@ import com.example.repofacade.core.ResultStatus;
  * {@link ResultStatus}를 구현하므로 데이터 실패를 일반 결과(ResultWrapper)로 rc 그대로 올려 보낼 수 있다.
  * 0~99는 공통·데이터 계층 대역이다 — 도메인 코드표는 100 이상을 쓴다.
  *
- * 성공은 두지 않는다 — 성공은 {@link ResultStatus#SUCCESS} 하나뿐이다.
- * (인터페이스 상수가 상속되어 {@code DataResultStatus.SUCCESS}로도 접근은 되지만 쓰지 말 것 —
- * 성공 판단은 {@code r.ok()}, 직접 부를 땐 {@code ResultStatus.SUCCESS}.)
+ * 성공은 두지 않는다 — 성공은 {@link com.example.repofacade.core.CommonResultStatus#SUCCESS} 하나뿐이다.
  */
 public enum DataResultStatus implements ResultStatus {
 

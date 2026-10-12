@@ -1,7 +1,10 @@
 package com.example.repofacade.core.data.mybatis;
 
+import java.sql.SQLException;
+
 import org.apache.ibatis.exceptions.PersistenceException;
 import org.apache.ibatis.exceptions.TooManyResultsException;
+import org.springframework.dao.DataAccessResourceFailureException;
 
 import com.example.repofacade.core.data.DataExceptionRule;
 import com.example.repofacade.core.data.DataResultStatus;
@@ -16,10 +19,19 @@ public class MyBatisExceptionRule implements DataExceptionRule {
         if (DataExceptionRule.hasCause(e, TooManyResultsException.class)) {
             return DataResultStatus.SQLOVF;
         }
-        // 스프링 변환을 거치지 않은 MyBatis 예외 (SqlSession 직접 사용 등)
-        if (e instanceof PersistenceException) {
-            return DataResultStatus.SYSTEM_ERROR;
-        }
         return null;
+    }
+
+    /**
+     * DB까지 가지 못한 MyBatis 내부 오류는 코드 버그다 — 매핑 누락(BindingException),
+     * 파라미터·결과 매핑 오류(ReflectionException, TypeException 등).
+     * 체인에 DB가 돌려준 오류(SQLException)나 연결 실패가 있으면 버그가 아니다 (일반 규칙이 분류).
+     */
+    @Override
+    public boolean isCodeBug(RuntimeException e) {
+        return DataExceptionRule.hasCause(e, PersistenceException.class)
+                && !DataExceptionRule.hasCause(e, TooManyResultsException.class)
+                && !DataExceptionRule.hasCause(e, SQLException.class)
+                && !DataExceptionRule.hasCause(e, DataAccessResourceFailureException.class);
     }
 }

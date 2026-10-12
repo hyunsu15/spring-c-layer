@@ -17,7 +17,15 @@ import java.util.function.ToIntFunction;
  */
 public interface RepoFacade<M> {
 
-    /** 단건 조회. 결과가 null이면 SQL_NO_DATA. */
+    /**
+     * 단건 조회. 결과가 null이면 SQL_NO_DATA.
+     *
+     * <p><b>주의 — 단일 컬럼·집계 조회는 SQL에서 NVL(COALESCE)로 감쌀 것.</b>
+     * MyBatis는 "0건"과 "NULL 한 행"(0건 MAX/SUM, 값이 NULL인 단일 컬럼)을 둘 다 null로 돌려주므로,
+     * 감싸지 않으면 행이 있어도 SQL_NO_DATA가 된다 (Oracle·C에서는 NOT FOUND가 아닌 경우).
+     * 레거시 C도 indicator 없이 NULL을 fetch하면 -1405라서 같은 이유로 NVL을 썼다.
+     * 여러 컬럼을 담는 Result 객체는 모든 컬럼이 NULL일 때만 null이라 해당 없다.
+     */
     <R> DataResultWrapper<R> one(Function<M, R> query);
 
     /**
