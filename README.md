@@ -1,8 +1,8 @@
-# repo-facade — 매퍼 파사드 자동 등록 (실행 가능 데모)
+# repo-facade — 매퍼 호출 파사드 (실행 가능 데모)
 
-MyBatis 매퍼마다 `RepoFacade<M>` 빈을 자동 등록해서, 예외 대신 `DataResultWrapper<T>`(rc + 값)로
-반환하는 C 호환 데이터 계층 구성. 상위 폴더의 스케치(.java 낱장 파일)를 실제 동작하는
-코드로 완성한 것이다.
+공용 파사드(`RepoFacade`) 하나로 매퍼 호출을 감싸서, 예외 대신 `DataResultWrapper<T>`(rc + 값)로
+반환하는 C 호환 데이터 계층 구성. C에서 SQLW 래퍼가 SQL 함수를 실행하고 rc를 돌려주던 자리다.
+상위 폴더의 스케치(.java 낱장 파일)를 실제 동작하는 코드로 완성한 것이다.
 
 ## 실행 방법
 
@@ -30,44 +30,55 @@ core/data/  (데이터 계층 — 기술 무관, 그대로 재사용 가능)
   DataResultStatus.java    rc 실패 코드표 — C 레거시 코드명 (SQL_NO_DATA=10,
                            SQLOVF=11, SQLDUP=20, SQLNULL=21, SQLDISCON=30, SYSTEM_ERROR=99)
                            ResultStatus 구현 (성공은 CommonResultStatus.SUCCESS를 쓴다)
-  RepoFacade.java          one / many — 매퍼 호출을 DataResultWrapper로 감싸는 인터페이스
+  RepoFacade.java          one / many — 매퍼 호출(람다)을 DataResultWrapper로 감싸는 인터페이스
                            (쓰기용 exec는 아직 불필요해 주석 처리 — 필요 시 해제)
-  DefaultRepoFacade.java   공용 제네릭 구현체 (SimpleJpaRepository와 같은 자리)
+  DefaultRepoFacade.java   구현체 — 애플리케이션 전체에 빈 1개 (@Component). 데이터 접근 객체를 들고 있지 않다
+  FacadeCallHook.java      파사드 호출 전후 확장점 — 빈으로 등록하면 모든 호출에 적용 (기술별 감시 장치가 쓴다)
   ExceptionClassifier.java 스프링 DataAccessException → DataResultStatus 분류 (버그성 예외는 다시 던짐)
   DataExceptionRule.java   기술별 예외 규칙 확장점 — 빈으로 등록하면 일반 규칙보다 먼저 적용 (분류 + 버그 판정)
-  AbstractRepoFacadeRegistrar.java  매퍼 정의마다 파사드 빈 정의를 양산하는 등록기 뼈대
 
-core/data/mybatis/  (MyBatis + mybatis-spring이 클래스패스에 있을 때만 활성)
-  MyBatisRepoFacadeConfiguration.java  조건부 설정 — 아래 두 빈을 등록
+core/data/mybatis/  (MyBatis + mybatis-spring이 클래스패스에 있을 때만 활성. MyBatis 관련 코드·주의사항은 여기에만 둔다)
+  package-info.java                    MyBatis로 쓸 때 주의 (NVL 규칙, 예외 래핑)
+  MyBatisRepoFacadeConfiguration.java  조건부 설정 — 예외 규칙·감시 장치 등록, 감시 스위치(GUARD_PROPERTY, 기본 off)
   MyBatisPresentCondition.java         활성 조건 (스프링 부트 @ConditionalOnClass 대용)
-  MyBatisRepoFacadeRegistrar.java      MapperFactoryBean 정의에서 매퍼 타입 추출
   MyBatisExceptionRule.java            TooManyResults(래핑됨) → SQLOVF, DB까지 못 간 MyBatis 내부 오류(매핑 누락 등) → 버그로 다시 던짐
+  FacadeGuard.java                     감시 장치 — 파사드 호출 전후로 "파사드 안" 표시(FacadeCallHook), SqlSessionFactory에 인터셉터 부착
+  FacadeGuardInterceptor.java          파사드 밖 매퍼 호출을 SQL 실행 직전에 거부 (감시를 켰을 때만 붙는다)
 
 src/test — demo/  (사용 예시 겸 시나리오 테스트. jar에 들어가지 않는다)
   OrderMapper.java         평범한 @Mapper 인터페이스 — 파사드는 이걸 건드리지 않는다 (데모용 함정 메서드 포함)
   OrderRow.java            테이블 모양의 Row 객체
-  OrderService.java        파사드를 쓰는 서비스 예시 — 주입, rc 분기, 실패 전파, 집계
-  AppConfig.java           H2 + MyBatis 조립 (파사드 등록기는 스캔으로 자동)
-  RepoFacadeScenarioTest.java  JUnit 시나리오 검증 — 조회 결과 / 실패 분류 / 결과 객체 규칙 / 서비스 흐름
+  OrderService.java        파사드를 쓰는 서비스 예시 — @Autowired 필드 주입, rc 분기, 실패 전파, 집계
+  AppConfig.java           H2 + MyBatis 조립 (파사드·MyBatis 연동은 스캔으로 자동)
+  RepoFacadeScenarioTest.java  JUnit 시나리오 검증 — 조회 결과 / 실패 분류 / 결과 객체 규칙 / 서비스 흐름 / 감시
   (resources) init.sql     데모 테이블
 ```
 
 ## 사용법 — 새 매퍼를 추가할 때
 
-1. `@Mapper` 인터페이스를 평소처럼 만든다. **파사드 관련 작업은 없다** — 등록기가
-   매퍼마다 `RepoFacade<M>` 빈을 자동 생성한다.
-2. 서비스에서 제네릭 타입으로 주입받아 쓴다:
+1. `@Mapper` 인터페이스를 평소처럼 만든다. **파사드 관련 작업은 없다.**
+2. 서비스는 매퍼를 평소처럼 주입받고, 파사드(공용 빈 1개)를 하나 더 받아 매퍼 호출을 감싼다:
 
 ```java
-private final RepoFacade<OrderMapper> orders;
+@Autowired private RepoFacade facade;
+@Autowired private OrderMapper orderMapper;
 
-DataResultWrapper<OrderRow> r = orders.one(m -> m.selectById(id));
+DataResultWrapper<OrderRow> r = facade.one(() -> orderMapper.selectById(id));
 if (r.fail()) {             // C 스타일 분기 — r.status().code() != 0 과 동일
     return r.propagate();   // rc·detail 그대로 ResultWrapper로
 }
 OrderRow row = r.value();
 return ResultWrapper.ok(row);
 ```
+
+C와 나란히 두면: `nRet = SelClnt_SDB(&hClnt, &dbClnt, NO_FLAG);` ↔ `r = facade.one(() -> selClntMapper.sel(param));`
+
+### 파사드 밖 직접 호출 감시 (선택, 기본 off)
+
+매퍼를 파사드 없이 부르면(`orderMapper.selectById(id)`) 예외가 rc로 바뀌지 않는다. 이런 호출을 찾으려면
+설정에 `repo-facade.mybatis.guard.enabled=true`를 넣는다. 켜면 파사드 밖 호출은 SQL 실행 직전에
+`IllegalStateException`(MyBatis가 감싸서 던짐, 메시지에 매퍼 메서드 ID)으로 거부된다.
+프레임워크가 직접 실행하는 SQL(페이징 건수 조회 등)이 있으면 그것도 잡히므로, 켜기 전에 확인한다.
 
 ## 설계 결정 요약
 
@@ -96,7 +107,7 @@ return ResultWrapper.ok(row);
   `r.status() == SQL_NO_DATA`로 따로 분기한다 — `valueOr(List.of())`는 연결 장애까지 삼키므로 쓰지 않는다.
 - **MyBatis 연동은 조건부다.** core.data는 스프링 DAO 예외 계층만 알고, MyBatis 고유 처리는
   core.data.mybatis에 모여 있다. MyBatis가 없으면 그 패키지는 통째로 비활성 (조건은 클래스 로드 전에 판정).
-  다른 기술(JPA 등)을 붙일 때는 `AbstractRepoFacadeRegistrar` + `DataExceptionRule`을 구현한다.
+  파사드 자체는 람다만 실행하므로 기술 무관이다. 다른 기술(JPA, JdbcTemplate 등)은 `DataExceptionRule`만 붙이면 된다.
 
 - **DataResultWrapper는 파사드만 만든다.** 생성자와 생성용 팩토리(`ok(T)`, `fail(DataResultStatus, String)`)는
   package-private이라 core.data 밖에서는 만들 수 없고, 받기·분기·값 꺼내기·`propagate()`는 public이다.
@@ -121,12 +132,20 @@ return ResultWrapper.ok(row);
   `MyBatisSystemException`으로 감싸기 때문에 타입 검사만으로는 못 잡는다
   ("마이 바티스 예외표준화.md"의 문제를 파사드 계층에서 해결). 연결 획득 실패(`CannotGetJdbcConnectionException`,
   커넥션 풀 대기 초과 포함)도 같은 식으로 감싸여 오므로 체인에서 찾아 SQLDISCON으로 분류한다.
-- **등록기는 BeanFactoryPostProcessor다.** 매퍼 정의를 만드는 MapperScannerConfigurer가
-  BeanDefinitionRegistryPostProcessor라서, 같은 단계에 끼면 실행 순서가 보장되지 않는다.
-  BFPP 단계는 모든 BDRPP 이후 실행이 보장된다.
-- **파사드 빈은 제네릭으로 구분된다.** 빈 정의에 `ResolvableType`으로 제네릭을 실어서
-  `RepoFacade<OrderMapper>` 주입 지점에 타입 매칭된다. 매퍼가 100개면 파사드 100개가
-  공짜로 생긴다.
+- **파사드는 빈 하나다 (매퍼별 빈 자동 등록에서 바꿈).** 예전에는 빈 후처리기가 매퍼마다 `RepoFacade<M>` 빈을
+  만들었는데, 세 가지 이유로 버렸다.
+  (1) 기동 비용: 파사드가 전부 같은 타입(`RepoFacade`)이고 제네릭으로만 구별되니, 스프링이 주입 지점마다 파사드 빈
+  N개 전부와 제네릭을 비교한다. 측정 결과 매퍼 1000개 0.45초, 3000개 5초로 매퍼 수의 제곱으로 늘었다
+  (SQL 하나당 매퍼 하나인 사내 구조라 매퍼 수 = SQLW 함수 수). 매퍼 직접 주입은 타입 캐시로 거의 0이다.
+  (2) mybatis-spring 내부 의존: `MapperFactoryBean` 클래스명 문자열과 빈 정의 속성을 읽어야 해서, 사내 프레임워크가
+  이를 상속하거나 버전이 바뀌면 파사드가 등록되지 않는다.
+  (3) 사내 관례가 `@Autowired` 필드 주입이라 매퍼는 어차피 서비스가 직접 받는다 — 파사드 하나만 더 받으면 된다.
+  잃은 것은 "서비스가 매퍼를 직접 쥐지 않는다"는 구조적 강제인데, 이는 감시 인터셉터로 대신한다.
+- **감시 인터셉터는 기본 off, 스위치로 켠다.** 감시 장치(`FacadeGuard`)가 파사드 호출 전후 확장점(`FacadeCallHook`)으로
+  "파사드 안" 표시를 켜고 끄고, 인터셉터는 SQL 실행 직전 그 표시가 없으면 거부한다. 파사드(core.data)는 확장점만 알고
+  감시 장치가 있는지 모른다 — MyBatis 관련 코드는 core.data.mybatis에만 있다. 인터셉터를 빈으로 내놓지 않고
+  SqlSessionFactory에 직접 붙이는 이유는, 스프링 부트의 MyBatis 자동 설정이 Interceptor 빈을 알아서 붙여서 스위치가
+  무시되거나 두 번 붙기 때문이다.
 
 ## 주의: 트랜잭션과 exec()
 
@@ -146,7 +165,9 @@ return ResultWrapper.ok(row);
 - 부트타임 검증 추가: 기동 시 모든 매퍼 메서드의 스테이트먼트 존재 확인.
 - Row → Domain 변환, 호출 감사 로깅: 필요해지면 DefaultRepoFacade 한 곳에 추가하면
   전 매퍼에 적용된다.
-- 호출부 시그니처가 아쉬워지면: 매퍼별 진짜 인터페이스(B/C안 — 코드 생성) 승격.
+- 호출부를 더 C처럼 만들고 싶어지면: 애너테이션 프로세서로 매퍼마다 SQLW 래퍼 클래스(`SelClntSdb.sel(p)`)를
+  컴파일 시점에 생성하는 안. 래퍼마다 타입이 달라 주입 비용은 선형이고, 서비스가 매퍼를 몰라도 된다.
+  대신 빌드 인프라가 필요하다.
 - 운영 적용 전: Oracle 등 실제 DB의 에러코드로 ExceptionClassifier 분류 검증,
   커스텀 `sql-error-codes.xml` 확장 검토.
 

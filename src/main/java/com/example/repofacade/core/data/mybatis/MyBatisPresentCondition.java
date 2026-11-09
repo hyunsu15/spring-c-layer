@@ -12,11 +12,12 @@ import org.springframework.util.ClassUtils;
 class MyBatisPresentCondition implements Condition {
 
     private static final String MYBATIS = "org.apache.ibatis.session.SqlSessionFactory";
+    private static final String MYBATIS_SPRING = "org.mybatis.spring.SqlSessionTemplate";
 
     @Override
     public boolean matches(ConditionContext context, AnnotatedTypeMetadata metadata) {
         ClassLoader cl = context.getClassLoader();
         return ClassUtils.isPresent(MYBATIS, cl)
-                && ClassUtils.isPresent(MyBatisRepoFacadeRegistrar.MAPPER_FACTORY_BEAN, cl);
+                && ClassUtils.isPresent(MYBATIS_SPRING, cl);
     }
 }

@@ -30,7 +30,7 @@ import org.springframework.stereotype.Component;
  * 이런 실패는 레거시에 없던, 전환하며 생긴 버그다. rc로 바꾸면 "조회오류도 정상 진행" 같은 레거시 분기에 묻힌다.
  *
  * 여기에는 스프링 DataAccessException 계층(기술 무관) 규칙만 둔다.
- * MyBatis 등 기술별 규칙은 {@link DataExceptionRule} 빈으로 붙는다 (core.data.mybatis 참고).
+ * 기술별 규칙은 {@link DataExceptionRule} 빈으로 붙는다 (각 연동 패키지에서 등록).
  */
 @Component
 public class ExceptionClassifier {
@@ -108,7 +108,7 @@ public class ExceptionClassifier {
 
     /**
      * 연결 획득 실패 또는 작업 중 연결 끊김. 타입이 아니라 cause 체인으로 본다
-     * — MyBatis는 연결 획득 실패(CannotGetJdbcConnectionException)를 MyBatisSystemException으로 감싸서 던진다.
+     * — 데이터 접근 기술에 따라 연결 획득 실패(CannotGetJdbcConnectionException)를 자기 예외로 감싸서 던진다.
      */
     private boolean isConnectionFailure(Throwable e) {
         return hasCause(e, DataAccessResourceFailureException.class)    // CannotGetJdbcConnectionException 포함

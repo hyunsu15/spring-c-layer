@@ -1,5 +1,7 @@
 package com.example.repofacade.demo;
 
+import java.util.UUID;
+
 import javax.sql.DataSource;
 
 import org.apache.ibatis.session.SqlSessionFactory;
@@ -21,7 +23,8 @@ public class AppConfig {
     @Bean
     public DataSource dataSource() throws Exception {
         JdbcDataSource ds = new JdbcDataSource();
-        ds.setURL("jdbc:h2:mem:demo;DB_CLOSE_DELAY=-1");
+        // 컨텍스트마다 별도 DB — 테스트가 설정을 바꿔 컨텍스트를 하나 더 띄워도 init.sql이 충돌하지 않게
+        ds.setURL("jdbc:h2:mem:demo-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
         ds.setUser("sa");
         try (var conn = ds.getConnection()) {
             ScriptUtils.executeSqlScript(conn, new ClassPathResource("init.sql"));
@@ -40,6 +43,6 @@ public class AppConfig {
         return factory.getObject();
     }
 
-    // 파사드 등록기는 따로 선언하지 않는다 — 컴포넌트 스캔이 core.data.mybatis의
-    // MyBatisRepoFacadeConfiguration을 잡아서, MyBatis가 클래스패스에 있으면 자동으로 붙는다.
+    // 파사드(DefaultRepoFacade)와 MyBatis 연동(MyBatisRepoFacadeConfiguration)은 따로 선언하지 않는다
+    // — 컴포넌트 스캔이 core 패키지를 잡고, MyBatis 연동은 클래스패스에 MyBatis가 있을 때만 붙는다.
 }

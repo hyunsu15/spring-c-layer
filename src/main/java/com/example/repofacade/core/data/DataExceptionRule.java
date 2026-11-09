@@ -1,7 +1,7 @@
 package com.example.repofacade.core.data;
 
 /**
- * 기술별(MyBatis 등) 예외 분류 규칙. {@link ExceptionClassifier}가 일반 규칙(스프링 DataAccessException 계층)보다
+ * 기술별 예외 분류 규칙. {@link ExceptionClassifier}가 일반 규칙(스프링 DataAccessException 계층)보다
  * 먼저 적용한다 — 기술별 예외는 보통 스프링의 미분류 예외로 감싸여 오므로, 일반 규칙이 먼저 보면 SYSTEM_ERROR로 뭉개진다.
  *
  * 빈으로 등록하면 자동으로 적용된다. 여러 개면 {@code @Order} 순서.
@@ -14,7 +14,7 @@ public interface DataExceptionRule {
 
     /**
      * 고칠 대상(코드 버그)이면 true — rc로 바꾸지 않고 그대로 던진다. {@link #classify}보다 먼저 본다.
-     * 기술별 내부 오류(MyBatis의 매핑 누락 등)는 스프링 예외로 감싸여 와서 일반 규칙만으로는 버그인지 알 수 없다.
+     * 기술별 내부 오류(매핑 누락 등)는 스프링 예외로 감싸여 와서 일반 규칙만으로는 버그인지 알 수 없다.
      */
     default boolean isCodeBug(RuntimeException e) {
         return false;
