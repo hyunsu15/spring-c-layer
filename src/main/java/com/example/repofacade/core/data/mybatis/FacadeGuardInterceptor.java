@@ -42,7 +42,7 @@ class FacadeGuardInterceptor implements Interceptor {
         if (!guard.insideFacade()) {
             MappedStatement ms = (MappedStatement) invocation.getArgs()[0];
             throw new IllegalStateException("파사드 밖 매퍼 호출: " + ms.getId()
-                    + " — RepoFacade.one/many로 감싸서 호출할 것");
+                    + " — RepoFacade.sel로 감싸서 호출할 것");
         }
         return invocation.proceed();
     }

@@ -7,11 +7,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 import org.apache.ibatis.binding.BindingException;
 import org.apache.ibatis.session.SqlSessionFactory;
+import org.apache.ibatis.type.TypeException;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -22,7 +24,9 @@ import org.junit.jupiter.api.TestInstance;
 import org.mybatis.spring.SqlSessionFactoryBean;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.core.Ordered;
 import org.springframework.core.env.MapPropertySource;
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.InvalidDataAccessResourceUsageException;
 
 import com.example.repofacade.core.CommonResultStatus;
@@ -31,6 +35,9 @@ import com.example.repofacade.core.ResultWrapper;
 import com.example.repofacade.core.data.DataExceptionRule;
 import com.example.repofacade.core.data.DataResultStatus;
 import com.example.repofacade.core.data.DataResultWrapper;
+import com.example.repofacade.core.data.DefaultRepoFacade;
+import com.example.repofacade.core.data.ExceptionClassifier;
+import com.example.repofacade.core.data.FacadeCallHook;
 import com.example.repofacade.core.data.RepoFacade;
 import com.example.repofacade.core.data.mybatis.MyBatisRepoFacadeConfiguration;
 
@@ -60,13 +67,13 @@ class RepoFacadeScenarioTest {
     }
 
     @Nested
-    @DisplayName("조회 결과 (one / many)")
+    @DisplayName("조회 결과 (sel — 단건·목록은 매퍼 반환 타입이 정한다)")
     class Query {
 
         @Test
         @DisplayName("단건 조회 성공 — rc=0, 값 그대로")
         void oneFound() {
-            DataResultWrapper<OrderRow> r = facade.one(() -> orderMapper.selectById(1));
+            DataResultWrapper<OrderRow> r = facade.sel(() -> orderMapper.selectById(1));
             assertEquals(0, r.status().code());
             assertEquals("kim", r.value().getCustomerName());
             assertEquals(0, new BigDecimal("10000.00").compareTo(r.value().getAmount()));
@@ -75,7 +82,7 @@ class RepoFacadeScenarioTest {
         @Test
         @DisplayName("없는 행은 예외 없이 SQL_NO_DATA(rc=10)")
         void oneMissing() {
-            DataResultWrapper<OrderRow> r = facade.one(() -> orderMapper.selectById(999));
+            DataResultWrapper<OrderRow> r = facade.sel(() -> orderMapper.selectById(999));
             assertTrue(r.fail());
             assertSame(DataResultStatus.SQL_NO_DATA, r.status());
         }
@@ -83,13 +90,41 @@ class RepoFacadeScenarioTest {
         @Test
         @DisplayName("selectOne인데 2건 — 감싸진 TooManyResults도 SQLOVF(rc=11)")
         void oneTooMany() {
-            assertSame(DataResultStatus.SQLOVF, facade.one(() -> orderMapper.selectByCustomer("lee")).status());
+            assertSame(DataResultStatus.SQLOVF, facade.sel(() -> orderMapper.selectByCustomer("lee")).status());
+        }
+
+        @Test
+        @DisplayName("같은 2건이라도 매퍼를 목록 타입으로 선언하면 정상 — SQLOVF는 단건 타입 선언에서만 난다")
+        void listTypeTakesMultipleRows() {
+            DataResultWrapper<List<OrderRow>> r = facade.sel(() -> orderMapper.selectListByCustomer("lee"));
+            assertTrue(r.ok());
+            assertEquals(2, r.value().size());
+        }
+
+        @Test
+        @DisplayName("Optional 반환 — 있으면 성공, 0건(empty)이면 SQL_NO_DATA")
+        void optionalResult() {
+            assertTrue(facade.sel(() -> orderMapper.selectOptionalById(1)).ok());
+            assertSame(DataResultStatus.SQL_NO_DATA, facade.sel(() -> orderMapper.selectOptionalById(999)).status());
+        }
+
+        @Test
+        @DisplayName("배열 반환 — 있으면 성공, 빈 배열이면 SQL_NO_DATA")
+        void arrayResult() {
+            assertEquals(2, facade.sel(() -> orderMapper.selectArrayByStatus("NEW")).value().length);
+            assertSame(DataResultStatus.SQL_NO_DATA, facade.sel(() -> orderMapper.selectArrayByStatus("CANCELLED")).status());
+        }
+
+        @Test
+        @DisplayName("커서 반환은 비었는지 알 수 없어 rc로 바꾸지 않고 거부(코드 버그)")
+        void cursorRejected() {
+            assertThrows(IllegalArgumentException.class, () -> facade.sel(() -> orderMapper.selectAllAsCursor()));
         }
 
         @Test
         @DisplayName("목록 조회 3건")
         void manyFound() {
-            DataResultWrapper<List<OrderRow>> r = facade.many(() -> orderMapper.selectAll());
+            DataResultWrapper<List<OrderRow>> r = facade.sel(() -> orderMapper.selectAll());
             assertTrue(r.ok());
             assertEquals(3, r.value().size());
         }
@@ -97,20 +132,20 @@ class RepoFacadeScenarioTest {
         @Test
         @DisplayName("빈 목록도 SQL_NO_DATA — 단건 조회와 같은 규칙(C의 NOT FOUND)")
         void manyEmpty() {
-            assertSame(DataResultStatus.SQL_NO_DATA, facade.many(() -> orderMapper.selectByStatus("CANCELLED")).status());
+            assertSame(DataResultStatus.SQL_NO_DATA, facade.sel(() -> orderMapper.selectByStatus("CANCELLED")).status());
         }
 
         @Test
         @DisplayName("감싸지 않은 0건 MAX()는 SQL_NO_DATA — 알려진 한계 (core.data.mybatis 패키지 문서 참고)")
         void aggregateWithoutNvl() {
             assertSame(DataResultStatus.SQL_NO_DATA,
-                    facade.one(() -> orderMapper.selectMaxAmountByStatus("CANCELLED")).status());
+                    facade.sel(() -> orderMapper.selectMaxAmountByStatus("CANCELLED")).status());
         }
 
         @Test
         @DisplayName("NVL(COALESCE)로 감싼 0건 MAX()는 성공(0)")
         void aggregateWithNvl() {
-            DataResultWrapper<BigDecimal> r = facade.one(() -> orderMapper.selectMaxAmountByStatusOrZero("CANCELLED"));
+            DataResultWrapper<BigDecimal> r = facade.sel(() -> orderMapper.selectMaxAmountByStatusOrZero("CANCELLED"));
             assertTrue(r.ok());
             assertEquals(0, r.value().signum());
         }
@@ -124,20 +159,41 @@ class RepoFacadeScenarioTest {
         @DisplayName("테이블명 오타는 rc로 바꾸지 않고 그대로 던진다")
         void badSqlThrows() {
             assertThrows(InvalidDataAccessResourceUsageException.class,
-                    () -> facade.one(() -> orderMapper.selectFromTypoTable(1)));
+                    () -> facade.sel(() -> orderMapper.selectFromTypoTable(1)));
         }
 
         @Test
         @DisplayName("SQL 매핑 누락은 rc로 바꾸지 않고 그대로 던진다")
         void missingMappingThrows() {
-            assertThrows(BindingException.class, () -> facade.one(() -> orderMapper.selectWithoutSql(1)));
+            assertThrows(BindingException.class, () -> facade.sel(() -> orderMapper.selectWithoutSql(1)));
+        }
+
+        @Test
+        @DisplayName("결과 매핑 오류(문자 컬럼을 숫자로)는 드라이버가 SQLException을 냈어도 rc(SQLNULL)로 바꾸지 않고 던진다")
+        void resultMappingErrorThrows() {
+            assertThrows(DataAccessException.class, () -> facade.sel(() -> orderMapper.selectNameAsNumber(1)));
+        }
+
+        @Test
+        @DisplayName("파라미터 매핑 오류는 드라이버가 SQLException을 냈어도 rc(SYSTEM_ERROR)로 바꾸지 않고 던진다")
+        void paramMappingErrorThrows() {
+            RuntimeException e = assertThrows(RuntimeException.class,
+                    () -> facade.sel(() -> orderMapper.selectIdWithFailingParam("kim")));
+            assertTrue(DataExceptionRule.hasCause(e, TypeException.class), e.toString());
+        }
+
+        @Test
+        @DisplayName("파라미터 세팅 도중 연결이 끊긴 것은 매핑 오류가 아니다 — SQLDISCON(rc=30)")
+        void disconnectWhileBindingIsDiscon() {
+            assertSame(DataResultStatus.SQLDISCON,
+                    facade.sel(() -> orderMapper.selectIdWithFailingParam(FailingParamTypeHandler.DISCONNECTED)).status());
         }
 
         @Test
         @DisplayName("DB 접속 불가는 SQLDISCON(rc=30) — MyBatis가 MyBatisSystemException으로 감싸 와도")
         void deadDbIsDiscon() throws Exception {
             OrderMapper dead = mapperOnDeadDb();
-            assertSame(DataResultStatus.SQLDISCON, facade.one(() -> dead.selectById(1)).status());
+            assertSame(DataResultStatus.SQLDISCON, facade.sel(() -> dead.selectById(1)).status());
         }
 
         /* exec가 활성화되면 테스트로 해제한다 — 쓰기 실패 분류(SQLDUP/SQLNULL) 검증.
@@ -172,14 +228,14 @@ class RepoFacadeScenarioTest {
         @Test
         @DisplayName("실패 결과의 value() 접근은 그 자리에서 터진다")
         void valueOfFailureThrows() {
-            DataResultWrapper<OrderRow> r = facade.one(() -> orderMapper.selectById(999));
+            DataResultWrapper<OrderRow> r = facade.sel(() -> orderMapper.selectById(999));
             assertThrows(IllegalStateException.class, r::value);
         }
 
         @Test
         @DisplayName("성공은 하나 — 데이터 계층 결과도 ok()이고 == SUCCESS")
         void singleSuccess() {
-            DataResultWrapper<OrderRow> r = facade.one(() -> orderMapper.selectById(1));
+            DataResultWrapper<OrderRow> r = facade.sel(() -> orderMapper.selectById(1));
             assertTrue(r.ok());
             assertSame(CommonResultStatus.SUCCESS, r.status());
         }
@@ -194,14 +250,14 @@ class RepoFacadeScenarioTest {
         @Test
         @DisplayName("데이터 실패를 propagate로 넘겨도 rc 그대로")
         void propagateKeepsStatus() {
-            ResultWrapper<String> lifted = facade.one(() -> orderMapper.selectById(999)).propagate();
+            ResultWrapper<String> lifted = facade.sel(() -> orderMapper.selectById(999)).propagate();
             assertSame(DataResultStatus.SQL_NO_DATA, lifted.status());
         }
 
         @Test
         @DisplayName("성공 결과의 propagate는 거부 — 값이 사라지므로")
         void propagateOfSuccessRejected() {
-            DataResultWrapper<OrderRow> r = facade.one(() -> orderMapper.selectById(1));
+            DataResultWrapper<OrderRow> r = facade.sel(() -> orderMapper.selectById(1));
             assertThrows(IllegalStateException.class, r::propagate);
         }
 
@@ -255,9 +311,10 @@ class RepoFacadeScenarioTest {
     class Guard {
 
         @Test
-        @DisplayName("기본은 꺼짐 — 매퍼를 직접 불러도 그대로 실행된다")
+        @DisplayName("기본은 꺼짐 — 매퍼를 직접 불러도 그대로 실행되고, 감시 장치는 등록조차 되지 않는다")
         void offByDefault() {
             assertEquals("kim", orderMapper.selectById(1).getCustomerName());
+            assertTrue(ctx.getBeansOfType(FacadeCallHook.class).isEmpty());
         }
 
         @Test
@@ -271,7 +328,7 @@ class RepoFacadeScenarioTest {
                 RepoFacade guardedFacade = guarded.getBean(RepoFacade.class);
                 OrderMapper guardedMapper = guarded.getBean(OrderMapper.class);
 
-                assertTrue(guardedFacade.one(() -> guardedMapper.selectById(1)).ok());
+                assertTrue(guardedFacade.sel(() -> guardedMapper.selectById(1)).ok());
                 assertTrue(guarded.getBean(OrderService.class).find(1).ok());
 
                 // MyBatis가 감싸서 던지므로 cause 체인에서 감시 예외를 찾는다
@@ -279,6 +336,85 @@ class RepoFacadeScenarioTest {
                 assertTrue(DataExceptionRule.hasCause(e, IllegalStateException.class), e.toString());
                 assertTrue(e.getMessage().contains("OrderMapper.selectById"), e.getMessage());
             }
+        }
+    }
+
+    @Nested
+    @DisplayName("파사드 호출 훅 (FacadeCallHook)")
+    class Hooks {
+
+        @Test
+        @DisplayName("순서대로 들어가고 역순으로 나온다")
+        void entersInOrderLeavesInReverse() {
+            List<String> trace = new ArrayList<>();
+            try (AnnotationConfigApplicationContext hooked = contextWithHooks(
+                    new RecordingHook("first", 1, trace, false), new RecordingHook("second", 2, trace, false))) {
+                RepoFacade hookedFacade = hooked.getBean(RepoFacade.class);
+                assertTrue(hookedFacade.sel(() -> {
+                    trace.add("body");
+                    return "row";
+                }).ok());
+            }
+            assertEquals(List.of("first.before", "second.before", "body", "second.after", "first.after"), trace);
+        }
+
+        @Test
+        @DisplayName("뒤쪽 훅의 before()가 던져도 먼저 들어간 훅의 after()는 불린다 — 본문은 실행되지 않는다")
+        void failingBeforeStillUnwindsEnteredHooks() {
+            List<String> trace = new ArrayList<>();
+            try (AnnotationConfigApplicationContext hooked = contextWithHooks(
+                    new RecordingHook("first", 1, trace, false), new RecordingHook("second", 2, trace, true))) {
+                RepoFacade hookedFacade = hooked.getBean(RepoFacade.class);
+                assertThrows(IllegalStateException.class, () -> hookedFacade.sel(() -> {
+                    trace.add("body");
+                    return "row";
+                }));
+            }
+            assertEquals(List.of("first.before", "second.before", "first.after"), trace);
+        }
+
+        private AnnotationConfigApplicationContext contextWithHooks(RecordingHook... hooks) {
+            AnnotationConfigApplicationContext hooked = new AnnotationConfigApplicationContext();
+            hooked.register(DefaultRepoFacade.class, ExceptionClassifier.class);
+            for (RecordingHook hook : hooks) {
+                hooked.registerBean(hook.name, FacadeCallHook.class, () -> hook);
+            }
+            hooked.refresh();
+            return hooked;
+        }
+    }
+
+    /** 불린 순서를 기록하는 훅. failOnBefore면 before()에서 던진다. */
+    private static final class RecordingHook implements FacadeCallHook, Ordered {
+
+        private final String name;
+        private final int order;
+        private final List<String> trace;
+        private final boolean failOnBefore;
+
+        RecordingHook(String name, int order, List<String> trace, boolean failOnBefore) {
+            this.name = name;
+            this.order = order;
+            this.trace = trace;
+            this.failOnBefore = failOnBefore;
+        }
+
+        @Override
+        public void before() {
+            trace.add(name + ".before");
+            if (failOnBefore) {
+                throw new IllegalStateException(name + ".before 실패");
+            }
+        }
+
+        @Override
+        public void after() {
+            trace.add(name + ".after");
+        }
+
+        @Override
+        public int getOrder() {
+            return order;
         }
     }
 

@@ -30,7 +30,7 @@ core/data/  (데이터 계층 — 기술 무관, 그대로 재사용 가능)
   DataResultStatus.java    rc 실패 코드표 — C 레거시 코드명 (SQL_NO_DATA=10,
                            SQLOVF=11, SQLDUP=20, SQLNULL=21, SQLDISCON=30, SYSTEM_ERROR=99)
                            ResultStatus 구현 (성공은 CommonResultStatus.SUCCESS를 쓴다)
-  RepoFacade.java          one / many — 매퍼 호출(람다)을 DataResultWrapper로 감싸는 인터페이스
+  RepoFacade.java          sel — 매퍼 호출(람다)을 DataResultWrapper로 감싸는 인터페이스 (단건·목록 구분 없이 하나)
                            (쓰기용 exec는 아직 불필요해 주석 처리 — 필요 시 해제)
   DefaultRepoFacade.java   구현체 — 애플리케이션 전체에 빈 1개 (@Component). 데이터 접근 객체를 들고 있지 않다
   FacadeCallHook.java      파사드 호출 전후 확장점 — 빈으로 등록하면 모든 호출에 적용 (기술별 감시 장치가 쓴다)
@@ -41,8 +41,10 @@ core/data/mybatis/  (MyBatis + mybatis-spring이 클래스패스에 있을 때�
   package-info.java                    MyBatis로 쓸 때 주의 (NVL 규칙, 예외 래핑)
   MyBatisRepoFacadeConfiguration.java  조건부 설정 — 예외 규칙·감시 장치 등록, 감시 스위치(GUARD_PROPERTY, 기본 off)
   MyBatisPresentCondition.java         활성 조건 (스프링 부트 @ConditionalOnClass 대용)
-  MyBatisExceptionRule.java            TooManyResults(래핑됨) → SQLOVF, DB까지 못 간 MyBatis 내부 오류(매핑 누락 등) → 버그로 다시 던짐
+  MyBatisExceptionRule.java            TooManyResults(래핑됨) → SQLOVF. 파라미터·결과 매핑 오류(드라이버 SQLException 포함)와
+                                       DB까지 못 간 MyBatis 내부 오류(매핑 누락 등) → 버그로 다시 던짐
   FacadeGuard.java                     감시 장치 — 파사드 호출 전후로 "파사드 안" 표시(FacadeCallHook), SqlSessionFactory에 인터셉터 부착
+  FacadeGuardEnabledCondition.java     감시 스위치 조건 — 꺼져 있으면 감시 장치 빈 자체를 등록하지 않는다
   FacadeGuardInterceptor.java          파사드 밖 매퍼 호출을 SQL 실행 직전에 거부 (감시를 켰을 때만 붙는다)
 
 src/test — demo/  (사용 예시 겸 시나리오 테스트. jar에 들어가지 않는다)
@@ -63,7 +65,7 @@ src/test — demo/  (사용 예시 겸 시나리오 테스트. jar에 들어가�
 @Autowired private RepoFacade facade;
 @Autowired private OrderMapper orderMapper;
 
-DataResultWrapper<OrderRow> r = facade.one(() -> orderMapper.selectById(id));
+DataResultWrapper<OrderRow> r = facade.sel(() -> orderMapper.selectById(id));
 if (r.fail()) {             // C 스타일 분기 — r.status().code() != 0 과 동일
     return r.propagate();   // rc·detail 그대로 ResultWrapper로
 }
@@ -71,7 +73,11 @@ OrderRow row = r.value();
 return ResultWrapper.ok(row);
 ```
 
-C와 나란히 두면: `nRet = SelClnt_SDB(&hClnt, &dbClnt, NO_FLAG);` ↔ `r = facade.one(() -> selClntMapper.sel(param));`
+C와 나란히 두면: `nRet = SelClnt_SDB(&hClnt, &dbClnt, NO_FLAG);` ↔ `r = facade.sel(() -> selClntMapper.sel(param));`
+
+목록도 같은 `sel`이다 — `DataResultWrapper<List<OrderRow>> rows = facade.sel(() -> orderMapper.selectAll());`
+단건인지 목록인지는 **매퍼 메서드의 반환 타입**이 정한다(MyBatis가 그걸 보고 selectOne/selectList를 고른다).
+C의 SELECT INTO처럼 2건 이상을 SQLOVF로 받아야 하는 SQLW는 매퍼를 단건 타입으로 선언한다 — List로 선언하면 2건도 정상이다.
 
 ### 파사드 밖 직접 호출 감시 (선택, 기본 off)
 
@@ -98,12 +104,17 @@ C와 나란히 두면: `nRet = SelClnt_SDB(&hClnt, &dbClnt, NO_FLAG);` ↔ `r = 
 - **rc 코드 대역.** 0~99는 공통·데이터 계층(SUCCESS=0, FAIL=1, DataResultStatus 10~99), 도메인 코드표는 100 이상.
   코드가 겹쳐도 `==` 비교는 틀리지 않지만 C 쪽으로 내보내는 rc가 모호해지므로 대역을 지킨다.
 - **도메인 코드표 추가 방법.** `enum XxxResultStatus implements ResultStatus`에 `code()`만 구현하면 끝. 등록 절차 없음.
-- **단일 컬럼·집계 조회는 SQL에서 NVL(COALESCE)로 감싼다.** `one()`은 null을 SQL_NO_DATA로 보는데, MyBatis는
+- **조회 메서드는 `sel` 하나다 (one / many에서 바꿈).** C의 `Sel…_SDB`처럼 단건·목록을 같은 이름으로 부른다.
+  단건·목록 구분은 이미 매퍼 반환 타입에 있고, MyBatis가 그걸 보고 실행 방식과 SQLOVF 여부를 정하므로 파사드에서
+  다시 나눌 이유가 없었다. 오히려 둘로 나누면 `one(() -> 목록)`이 컴파일되고 빈 목록이 성공으로 나오는 함정이 생겼다.
+  (자바에서 `Supplier<R>`와 `Supplier<List<R>>`는 오버로드할 수 없어서, 결과를 보고 판정한다.)
+  0건 판정: null, 빈 컬렉션·맵·배열, 빈 Optional → SQL_NO_DATA. 비었는지 미리 알 수 없는 커서·스트림은 거부(예외).
+- **단일 컬럼·집계 조회는 SQL에서 NVL(COALESCE)로 감싼다.** `sel()`은 단건 null을 SQL_NO_DATA로 보는데, MyBatis는
   "0건"과 "NULL 한 행"(0건 `MAX()`, 값이 NULL인 단일 컬럼)을 둘 다 null로 준다. 감싸지 않으면 Oracle·C에서는
   NOT FOUND가 아닌 경우도 SQL_NO_DATA가 된다. 행 수를 세는 플러그인으로 코드에서 가를 수도 있지만, 해당하는 경우가
   드물어(Result 객체는 모든 컬럼이 NULL일 때만 null) 모든 쿼리에 플러그인을 거는 것보다 규칙이 낫다고 판단했다.
   레거시 C도 indicator 없이 NULL을 fetch하면 -1405라서 같은 이유로 NVL을 썼다.
-- **목록이 비면 SQL_NO_DATA.** `many()`도 `one()`과 같은 규칙 (C의 NOT FOUND). 0건이 정상인 호출부는
+- **목록이 비면 SQL_NO_DATA.** 단건 0건과 같은 규칙 (C의 NOT FOUND). 0건이 정상인 호출부는
   `r.status() == SQL_NO_DATA`로 따로 분기한다 — `valueOr(List.of())`는 연결 장애까지 삼키므로 쓰지 않는다.
 - **MyBatis 연동은 조건부다.** core.data는 스프링 DAO 예외 계층만 알고, MyBatis 고유 처리는
   core.data.mybatis에 모여 있다. MyBatis가 없으면 그 패키지는 통째로 비활성 (조건은 클래스 로드 전에 판정).
@@ -128,6 +139,11 @@ C와 나란히 두면: `nRet = SelClnt_SDB(&hClnt, &dbClnt, NO_FLAG);` ↔ `r = 
   매핑 누락(`BindingException`), 파라미터·결과 매핑 오류, NPE 등. 이런 버그는 레거시에 없던, 전환하며 생긴 실패라서
   rc로 바꾸면 "조회오류도 정상 진행" 같은 레거시 분기에 묻혀 조용한 장애가 된다.
   버그 판정은 분류보다 먼저 하고, 기술별 판정은 `DataExceptionRule.isCodeBug`로 붙인다.
+- **매핑 오류는 드라이버가 SQLException을 냈어도 버그다.** 문자 컬럼을 숫자 필드로 받거나(그냥 두면 SQLState 22xxx라
+  SQLNULL이 된다), null 파라미터에 jdbcType을 빠뜨려 Oracle이 "부적합한 열 유형: 1111"을 내는 경우(그냥 두면 SYSTEM_ERROR)다.
+  파라미터 쪽은 `TypeException`이 체인에 남아 타입으로 잡는다. 결과 쪽은 mybatis-spring이 MyBatis 예외를 벗기고 안쪽
+  SQLException만 변환해서 타입이 남지 않으므로, MyBatis가 붙이는 고정 문구(`Error attempting to get column`)로 잡는다.
+  연결 끊김은 어느 단계에서 났든 이 판정보다 먼저 걸러져 SQLDISCON이 된다.
 - **TooManyResults와 연결 실패는 cause 체인으로 판별한다.** mybatis-spring이
   `MyBatisSystemException`으로 감싸기 때문에 타입 검사만으로는 못 잡는다
   ("마이 바티스 예외표준화.md"의 문제를 파사드 계층에서 해결). 연결 획득 실패(`CannotGetJdbcConnectionException`,
@@ -142,7 +158,9 @@ C와 나란히 두면: `nRet = SelClnt_SDB(&hClnt, &dbClnt, NO_FLAG);` ↔ `r = 
   (3) 사내 관례가 `@Autowired` 필드 주입이라 매퍼는 어차피 서비스가 직접 받는다 — 파사드 하나만 더 받으면 된다.
   잃은 것은 "서비스가 매퍼를 직접 쥐지 않는다"는 구조적 강제인데, 이는 감시 인터셉터로 대신한다.
 - **감시 인터셉터는 기본 off, 스위치로 켠다.** 감시 장치(`FacadeGuard`)가 파사드 호출 전후 확장점(`FacadeCallHook`)으로
-  "파사드 안" 표시를 켜고 끄고, 인터셉터는 SQL 실행 직전 그 표시가 없으면 거부한다. 파사드(core.data)는 확장점만 알고
+  "파사드 안" 표시를 켜고 끄고, 인터셉터는 SQL 실행 직전 그 표시가 없으면 거부한다. 꺼져 있으면 감시 장치 빈 자체가
+  등록되지 않아 파사드 호출 경로에 아무것도 끼지 않는다. 훅은 등록 순서대로 들어가 역순으로 나오고, `before()`를 마친
+  훅의 `after()`는 뒤쪽 훅이나 본문이 던져도 반드시 불린다 — 표시가 스레드에 남아 감시가 뚫리는 일을 막는다. 파사드(core.data)는 확장점만 알고
   감시 장치가 있는지 모른다 — MyBatis 관련 코드는 core.data.mybatis에만 있다. 인터셉터를 빈으로 내놓지 않고
   SqlSessionFactory에 직접 붙이는 이유는, 스프링 부트의 MyBatis 자동 설정이 Interceptor 빈을 알아서 붙여서 스위치가
   무시되거나 두 번 붙기 때문이다.

@@ -1,8 +1,13 @@
 package com.example.repofacade.core.data;
 
+import java.lang.reflect.Array;
+import java.util.Collection;
+import java.util.Iterator;
 import java.util.List;
-import java.util.function.IntSupplier;
+import java.util.Map;
+import java.util.Optional;
 import java.util.function.Supplier;
+import java.util.stream.BaseStream;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
@@ -22,44 +27,72 @@ public class DefaultRepoFacade implements RepoFacade {
     }
 
     @Override
-    public <R> DataResultWrapper<R> one(Supplier<R> query) {
+    public <R> DataResultWrapper<R> sel(Supplier<R> query) {
         return call(() -> {
-            R row = query.get();
-            return row == null
+            R result = query.get();
+            return isEmpty(result)
                     ? DataResultWrapper.fail(DataResultStatus.SQL_NO_DATA, "조회 결과 없음")
-                    : DataResultWrapper.ok(row);
-        });
-    }
-
-    @Override
-    public <R> DataResultWrapper<List<R>> many(Supplier<List<R>> query) {
-        return call(() -> {
-            List<R> rows = query.get();
-            return rows == null || rows.isEmpty()
-                    ? DataResultWrapper.fail(DataResultStatus.SQL_NO_DATA, "조회 결과 없음")
-                    : DataResultWrapper.ok(rows);
+                    : DataResultWrapper.ok(result);
         });
     }
 
     /* 인터페이스의 exec가 활성화되면 같이 해제한다.
     @Override
-    public DataResultWrapper<Integer> exec(IntSupplier command) {
+    public DataResultWrapper<Integer> exec(java.util.function.IntSupplier command) {
         return call(() -> DataResultWrapper.ok(command.getAsInt()));
     }
     */
 
-    private <T> DataResultWrapper<T> call(Supplier<DataResultWrapper<T>> body) {
-        for (FacadeCallHook hook : hooks) {
-            hook.before();
+    /**
+     * 0건(C의 NOT FOUND)인가. 단건은 null, 목록·맵·배열·Optional은 비어 있을 때.
+     * 비었는지 미리 알 수 없는 지연 결과는 rc를 정할 수 없으므로 거부한다 — 이 예외는 분류 대상이 아니라 그대로 던져진다.
+     */
+    private static boolean isEmpty(Object result) {
+        if (result == null) {
+            return true;
         }
-        try {
-            return body.get();
-        } catch (RuntimeException e) {
-            return classifier.toResult(e);   // 분류 불가(버그성)면 여기서 다시 던져진다
-        } finally {
-            for (int i = hooks.size() - 1; i >= 0; i--) {   // 들어간 역순으로 나온다
-                hooks.get(i).after();
+        if (result instanceof Collection<?> c) {
+            return c.isEmpty();
+        }
+        if (result instanceof Map<?, ?> m) {
+            return m.isEmpty();
+        }
+        if (result instanceof Optional<?> o) {
+            return o.isEmpty();
+        }
+        if (result.getClass().isArray()) {
+            return Array.getLength(result) == 0;
+        }
+        if (result instanceof Iterable<?> || result instanceof Iterator<?> || result instanceof BaseStream<?, ?>) {
+            throw new IllegalArgumentException("비었는지 알 수 없는 지연 결과(" + result.getClass().getName()
+                    + ")는 sel로 받을 수 없다 — List로 받을 것");
+        }
+        return false;
+    }
+
+    private <T> DataResultWrapper<T> call(Supplier<DataResultWrapper<T>> body) {
+        return call(0, body);
+    }
+
+    /**
+     * index번째 훅부터 차례로 들어갔다가 역순으로 나온다. 훅마다 자기 finally를 가지므로, before()가 끝난 훅은
+     * 뒤쪽 훅의 before()/after()나 본문이 예외를 던져도 after()가 반드시 불린다.
+     * 훅이 던진 예외는 분류하지 않는다 — rc로 바꾸는 대상은 본문(데이터 접근)의 예외뿐이다.
+     */
+    private <T> DataResultWrapper<T> call(int index, Supplier<DataResultWrapper<T>> body) {
+        if (index == hooks.size()) {
+            try {
+                return body.get();
+            } catch (RuntimeException e) {
+                return classifier.toResult(e);   // 분류 불가(버그성)면 여기서 다시 던져진다
             }
+        }
+        FacadeCallHook hook = hooks.get(index);
+        hook.before();
+        try {
+            return call(index + 1, body);
+        } finally {
+            hook.after();
         }
     }
 }

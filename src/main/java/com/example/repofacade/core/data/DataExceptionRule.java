@@ -1,5 +1,12 @@
 package com.example.repofacade.core.data;
 
+import java.sql.SQLNonTransientConnectionException;
+import java.sql.SQLRecoverableException;
+import java.sql.SQLTransientConnectionException;
+
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.RecoverableDataAccessException;
+
 /**
  * 기술별 예외 분류 규칙. {@link ExceptionClassifier}가 일반 규칙(스프링 DataAccessException 계층)보다
  * 먼저 적용한다 — 기술별 예외는 보통 스프링의 미분류 예외로 감싸여 오므로, 일반 규칙이 먼저 보면 SYSTEM_ERROR로 뭉개진다.
@@ -18,6 +25,19 @@ public interface DataExceptionRule {
      */
     default boolean isCodeBug(RuntimeException e) {
         return false;
+    }
+
+    /**
+     * 연결 획득 실패 또는 작업 중 연결 끊김. 타입이 아니라 cause 체인으로 본다
+     * — 데이터 접근 기술에 따라 연결 획득 실패(CannotGetJdbcConnectionException)를 자기 예외로 감싸서 던진다.
+     * 기술별 규칙도 쓴다: 연결 실패는 어느 단계(파라미터 세팅, 결과 읽기)에서 났든 코드 버그가 아니다.
+     */
+    static boolean isConnectionFailure(Throwable e) {
+        return hasCause(e, DataAccessResourceFailureException.class)    // CannotGetJdbcConnectionException 포함
+                || hasCause(e, RecoverableDataAccessException.class)
+                || hasCause(e, SQLTransientConnectionException.class)     // 커넥션 풀 대기 시간 초과 등
+                || hasCause(e, SQLNonTransientConnectionException.class)
+                || hasCause(e, SQLRecoverableException.class);
     }
 
     /** cause 체인에 해당 타입이 있는지. 래핑된 예외 판별용. */

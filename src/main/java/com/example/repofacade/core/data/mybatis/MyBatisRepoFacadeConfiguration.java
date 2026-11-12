@@ -3,7 +3,6 @@ package com.example.repofacade.core.data.mybatis;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.env.Environment;
 
 /**
  * MyBatis 연동 묶음. MyBatis 의존성이 있을 때만 활성화된다 — 없으면 이 패키지는 통째로 무시되고
@@ -17,7 +16,7 @@ import org.springframework.core.env.Environment;
 @Conditional(MyBatisPresentCondition.class)
 public class MyBatisRepoFacadeConfiguration {
 
-    /** 파사드 밖 매퍼 호출 감시({@link FacadeGuardInterceptor}) 스위치. 기본 false. */
+    /** 파사드 밖 매퍼 호출 감시({@link FacadeGuard}, {@link FacadeGuardInterceptor}) 스위치. 기본 false. */
     public static final String GUARD_PROPERTY = "repo-facade.mybatis.guard.enabled";
 
     @Bean
@@ -26,13 +25,15 @@ public class MyBatisRepoFacadeConfiguration {
     }
 
     /**
-     * 파사드 밖 매퍼 호출 감시. 스위치가 꺼져 있으면 등록은 되지만 아무것도 하지 않는다.
+     * 파사드 밖 매퍼 호출 감시. 스위치가 켜졌을 때만 등록된다 — 꺼져 있으면 빈 자체가 없어서
+     * 파사드의 훅 목록이 비고, 호출 경로에 아무것도 끼지 않는다.
      * 인터셉터를 빈으로 내놓지 않고 {@link FacadeGuard}가 SqlSessionFactory에 직접 붙이는 이유: 스프링 부트의 MyBatis 자동
-     * 설정은 Interceptor 빈을 알아서 붙이므로, 빈으로 내놓으면 부트 환경에서는 스위치와 상관없이 붙거나 두 번 붙는다.
+     * 설정은 Interceptor 빈을 알아서 붙이므로, 빈으로 내놓으면 부트 환경에서는 두 번 붙는다.
      * BeanPostProcessor는 static @Bean으로 등록해야 설정 클래스 초기화보다 먼저 안전하게 뜬다.
      */
     @Bean
-    static FacadeGuard facadeGuard(Environment env) {
-        return new FacadeGuard(env.getProperty(GUARD_PROPERTY, Boolean.class, false));
+    @Conditional(FacadeGuardEnabledCondition.class)
+    static FacadeGuard facadeGuard() {
+        return new FacadeGuard();
     }
 }

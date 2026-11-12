@@ -20,7 +20,7 @@ import com.example.repofacade.core.ResultWrapper;
  *
  * <p><b>서비스·중간모듈은 이 타입을 반환하지 않는다.</b> 받은 결과를 {@link ResultWrapper}로 바꿔 내보낸다.
  * <pre>{@code
- * DataResultWrapper<OrderRow> r = facade.one(() -> orderMapper.selectById(id));
+ * DataResultWrapper<OrderRow> r = facade.sel(() -> orderMapper.selectById(id));
  * if (r.fail()) {
  *     return r.propagate();                  // 실패: rc·detail 그대로 ResultWrapper로
  * }

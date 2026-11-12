@@ -28,7 +28,7 @@ public class OrderService {
 
     /** 단건 조회 — 파사드 결과를 그대로 중간모듈 결과로 옮기는 가장 단순한 형태. */
     public ResultWrapper<OrderRow> find(long id) {
-        DataResultWrapper<OrderRow> r = facade.one(() -> orderMapper.selectById(id));
+        DataResultWrapper<OrderRow> r = facade.sel(() -> orderMapper.selectById(id));
         if (r.fail()) {
             return r.propagate();
         }
@@ -37,7 +37,7 @@ public class OrderService {
 
     /** 조회 후 가공 — 실패(rc != 0)면 그 rc 그대로 상위에 전파하고, 성공만 요약 문자열로 만든다. */
     public ResultWrapper<String> summarize(long id) {
-        DataResultWrapper<OrderRow> r = facade.one(() -> orderMapper.selectById(id));
+        DataResultWrapper<OrderRow> r = facade.sel(() -> orderMapper.selectById(id));
         if (r.fail()) {
             return r.propagate();
         }
@@ -45,9 +45,9 @@ public class OrderService {
         return ResultWrapper.ok(row.getCustomerName() + " 주문 " + row.getAmount() + "원 (" + row.getStatus() + ")");
     }
 
-    /** 목록 조회 후 집계 — many() 결과를 C 스타일 루프로 합산한다. */
+    /** 목록 조회 후 집계 — 단건과 같은 sel()로 받고(매퍼가 List를 반환하므로 목록), C 스타일 루프로 합산한다. */
     public ResultWrapper<BigDecimal> totalAmount() {
-        DataResultWrapper<List<OrderRow>> r = facade.many(() -> orderMapper.selectAll());
+        DataResultWrapper<List<OrderRow>> r = facade.sel(() -> orderMapper.selectAll());
         if (r.fail()) {
             return r.propagate();
         }

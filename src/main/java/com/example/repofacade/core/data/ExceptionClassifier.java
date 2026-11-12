@@ -1,25 +1,21 @@
 package com.example.repofacade.core.data;
 
 import static com.example.repofacade.core.data.DataExceptionRule.hasCause;
+import static com.example.repofacade.core.data.DataExceptionRule.isConnectionFailure;
 
 import java.sql.SQLException;
-import java.sql.SQLNonTransientConnectionException;
-import java.sql.SQLRecoverableException;
-import java.sql.SQLTransientConnectionException;
 import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataAccessException;
-import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.dao.IncorrectResultSizeDataAccessException;
 import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.dao.InvalidDataAccessResourceUsageException;
-import org.springframework.dao.RecoverableDataAccessException;
 import org.springframework.stereotype.Component;
 
 /**
@@ -104,18 +100,6 @@ public class ExceptionClassifier {
         }
         return e instanceof InvalidDataAccessResourceUsageException
                 || e instanceof InvalidDataAccessApiUsageException;
-    }
-
-    /**
-     * 연결 획득 실패 또는 작업 중 연결 끊김. 타입이 아니라 cause 체인으로 본다
-     * — 데이터 접근 기술에 따라 연결 획득 실패(CannotGetJdbcConnectionException)를 자기 예외로 감싸서 던진다.
-     */
-    private boolean isConnectionFailure(Throwable e) {
-        return hasCause(e, DataAccessResourceFailureException.class)    // CannotGetJdbcConnectionException 포함
-                || hasCause(e, RecoverableDataAccessException.class)
-                || hasCause(e, SQLTransientConnectionException.class)     // 커넥션 풀 대기 시간 초과 등
-                || hasCause(e, SQLNonTransientConnectionException.class)
-                || hasCause(e, SQLRecoverableException.class);
     }
 
     private String rootMessage(Throwable e) {
