@@ -27,7 +27,7 @@ public interface RepoFacade {
      * 단건 타입으로 선언한 조회가 2건 이상이면 데이터 접근 기술이 던진 예외가 SQLOVF로 분류된다.
      * 그래서 C의 SELECT INTO(SQLOVF로 분기하던 자리)는 반드시 단건 타입으로 선언한다 — 목록 타입이면 2건도 정상이다.
      *
-     * <p><b>0건이 정상인 호출부</b>는 {@code r.status() == DataResultStatus.SQL_NO_DATA}로 따로 분기한다
+     * <p><b>0건이 정상인 호출부</b>는 {@code r.noData()}를 {@code r.fail()}보다 먼저 보고 따로 분기한다
      * ({@code valueOr(List.of())}는 연결 장애 같은 진짜 실패까지 빈 목록으로 삼키므로 쓰지 말 것).
      *
      * <p><b>null이 "0건"만 뜻하는지는 데이터 접근 기술에 달려 있다.</b>

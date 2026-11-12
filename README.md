@@ -67,7 +67,7 @@ src/test — demo/  (사용 예시 겸 시나리오 테스트. jar에 들어가�
 
 DataResultWrapper<OrderRow> r = facade.sel(() -> orderMapper.selectById(id));
 if (r.fail()) {             // C 스타일 분기 — r.status().code() != 0 과 동일
-    return r.propagate();   // rc·detail 그대로 ResultWrapper로
+    return r.propagate();   // rc·detail·cause 그대로 ResultWrapper로
 }
 OrderRow row = r.value();
 return ResultWrapper.ok(row);
@@ -78,6 +78,21 @@ C와 나란히 두면: `nRet = SelClnt_SDB(&hClnt, &dbClnt, NO_FLAG);` ↔ `r = 
 목록도 같은 `sel`이다 — `DataResultWrapper<List<OrderRow>> rows = facade.sel(() -> orderMapper.selectAll());`
 단건인지 목록인지는 **매퍼 메서드의 반환 타입**이 정한다(MyBatis가 그걸 보고 selectOne/selectList를 고른다).
 C의 SELECT INTO처럼 2건 이상을 SQLOVF로 받아야 하는 SQLW는 매퍼를 단건 타입으로 선언한다 — List로 선언하면 2건도 정상이다.
+
+0건이 정상인 호출(페이징 루프의 마지막 페이지, "없으면 공백" 등)은 `noData()`를 `fail()`보다 **먼저** 본다.
+순서를 바꾸면 빈 페이지가 조회 오류가 된다. 최상위 서비스가 프레임워크 예외로 바꿀 때는 `cause()`로 원인을 잇는다.
+
+```java
+// C: if (nRet != SUCCESS) { if (hSQL.sqlw_err == SQL_NO_DATA) {...} else { SetMsgCode("MSG_8000"); ... } }
+DataResultWrapper<SelFirmCommdaResult> r = facade.sel(() -> selFirmCommdaMapper.sel(param));
+if (r.noData()) {
+    item.setCommdaNm(" ");
+} else if (r.fail()) {
+    throw PBOnlineException.create("8000", r.cause());   // 0건이면 cause는 null, DB 예외면 원래 예외
+} else {
+    item.setCommdaNm(r.value().getMdaCodeNm());
+}
+```
 
 ### 파사드 밖 직접 호출 감시 (선택, 기본 off)
 
@@ -115,7 +130,20 @@ C의 SELECT INTO처럼 2건 이상을 SQLOVF로 받아야 하는 SQLW는 매퍼�
   드물어(Result 객체는 모든 컬럼이 NULL일 때만 null) 모든 쿼리에 플러그인을 거는 것보다 규칙이 낫다고 판단했다.
   레거시 C도 indicator 없이 NULL을 fetch하면 -1405라서 같은 이유로 NVL을 썼다.
 - **목록이 비면 SQL_NO_DATA.** 단건 0건과 같은 규칙 (C의 NOT FOUND). 0건이 정상인 호출부는
-  `r.status() == SQL_NO_DATA`로 따로 분기한다 — `valueOr(List.of())`는 연결 장애까지 삼키므로 쓰지 않는다.
+  `r.noData()`로 따로 분기한다 — `valueOr(List.of())`는 연결 장애까지 삼키므로 쓰지 않는다.
+- **0건 판정은 `noData()`다 (`isEmpty()`가 아니다).** 실제 서비스(SACMQ249·SONAQ402)의 매퍼 호출 11곳 중 6곳이
+  0건을 오류가 아닌 별도 분기로 처리해서, `r.status() == DataResultStatus.SQL_NO_DATA`를 매번 쓰게 하는 대신 메서드로 뒀다.
+  `isEmpty()`로 하지 않은 이유: 자바에서 `isEmpty()`는 "값이 없다"로 읽힌다(Optional.isEmpty). 실패 결과는 전부 값이
+  없으므로 SQLDISCON도 "empty"처럼 읽혀, 막으려던 혼동(장애를 0건으로 처리)을 이름이 부른다. 또 값이 List일 때
+  `r.isEmpty()`와 `r.value().isEmpty()`가 나란히 생긴다. `noData()`는 C의 SQL_NO_DATA와 이름이 맞고, `ok()`/`fail()`과 같은 꼴이다.
+  `fail()`의 하위 판정이라 분기 수단이 둘로 갈리지 않는다. 판정은 상태가 정한다(`ResultStatus.noData()`, 기본 false,
+  `DataResultStatus.SQL_NO_DATA`만 true) — 그래서 `ResultWrapper`로 전파된 뒤에도 같은 메서드가 동작하고,
+  도메인 코드표도 "찾는 데이터 없음" 상태를 noData로 선언할 수 있다.
+- **실패에는 detail과 cause를 함께 둔다 (detail을 예외로 바꾸지 않았다).** detail은 C의 `sqlw_msg`처럼 모든 실패에
+  있는 사람용 설명이고, cause는 rc로 바뀐 원래 예외다. 예외만 두면 0건(예외 없이 판정)이나 이 계층이 직접 판단한
+  실패에 넣을 것이 없어 가짜 예외를 만들어야 한다. 반대로 detail만 두면 `PBOnlineException.create("8000", e)`처럼
+  원인을 넘기던 기존 코드가 스택·SQLCODE를 잃는다. cause는 `propagate()`로 계층을 넘어도 유지되고, 실패 결과의
+  `value()` 접근 예외에도 이어진다. 분기에는 쓰지 않는다 — 분기는 상태로 한다.
 - **MyBatis 연동은 조건부다.** core.data는 스프링 DAO 예외 계층만 알고, MyBatis 고유 처리는
   core.data.mybatis에 모여 있다. MyBatis가 없으면 그 패키지는 통째로 비활성 (조건은 클래스 로드 전에 판정).
   파사드 자체는 람다만 실행하므로 기술 무관이다. 다른 기술(JPA, JdbcTemplate 등)은 `DataExceptionRule`만 붙이면 된다.

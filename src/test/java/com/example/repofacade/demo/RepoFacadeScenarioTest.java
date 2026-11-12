@@ -267,6 +267,53 @@ class RepoFacadeScenarioTest {
             ResultWrapper<Integer> relayed = service.summarize(999).propagate();
             assertSame(DataResultStatus.SQL_NO_DATA, relayed.status());
         }
+
+        @Test
+        @DisplayName("noData()는 0건만 true — 성공·연결 장애는 false, 전파 후에도 유지")
+        void noDataOnlyForNoData() throws Exception {
+            DataResultWrapper<OrderRow> none = facade.sel(() -> orderMapper.selectById(999));
+            assertTrue(none.noData());
+            assertTrue(none.fail(), "noData는 fail의 하위 판정");
+            assertTrue(none.<String>propagate().noData());
+
+            assertFalse(facade.sel(() -> orderMapper.selectById(1)).noData());
+
+            OrderMapper dead = mapperOnDeadDb();
+            DataResultWrapper<OrderRow> discon = facade.sel(() -> dead.selectById(1));
+            assertTrue(discon.fail());
+            assertFalse(discon.noData(), "연결 장애를 0건으로 읽으면 안 된다");
+            assertFalse(ResultWrapper.fail(CommonResultStatus.FAIL, "x").noData());
+        }
+
+        @Test
+        @DisplayName("cause — DB 예외에서 온 실패는 원래 예외를 들고, 전파·value() 접근 예외까지 이어진다")
+        void causeKeptAcrossLayers() throws Exception {
+            OrderMapper dead = mapperOnDeadDb();
+            DataResultWrapper<OrderRow> r = facade.sel(() -> dead.selectById(1));
+            assertTrue(r.cause() != null && DataExceptionRule.isConnectionFailure(r.cause()), String.valueOf(r.cause()));
+
+            ResultWrapper<String> relayed = r.propagate();
+            assertSame(r.cause(), relayed.cause());
+            assertSame(r.cause(), assertThrows(IllegalStateException.class, relayed::value).getCause());
+            assertSame(r.cause(), assertThrows(IllegalStateException.class, r::value).getCause());
+        }
+
+        @Test
+        @DisplayName("cause — 0건·성공은 예외 없이 판정되므로 null, 성공에 cause를 담는 것은 거부")
+        void causeAbsentWithoutException() {
+            assertEquals(null, facade.sel(() -> orderMapper.selectById(999)).cause());
+            assertEquals(null, facade.sel(() -> orderMapper.selectById(1)).cause());
+            assertThrows(IllegalArgumentException.class,
+                    () -> new ResultWrapper<>(CommonResultStatus.SUCCESS, "x", null, new RuntimeException()));
+        }
+
+        @Test
+        @DisplayName("새 실패에 원인 잇기 — ResultWrapper.fail(status, detail, cause)")
+        void newFailureWithCause() {
+            RuntimeException moduleError = new RuntimeException("모듈 오류 1511");
+            ResultWrapper<String> r = ResultWrapper.fail(CommonResultStatus.FAIL, "계좌 조회 실패", moduleError);
+            assertSame(moduleError, r.<Integer>propagate().cause());
+        }
     }
 
     @Nested

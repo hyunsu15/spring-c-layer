@@ -49,4 +49,14 @@ public interface ResultStatus {
     default boolean fail() {
         return !ok();
     }
+
+    /**
+     * 0건(C의 SQL_NO_DATA / NOT FOUND)을 뜻하는 실패인가. {@code fail()}의 하위 판정이다 — noData면 항상 fail.
+     * 기본은 false. 데이터 계층 코드표({@code DataResultStatus.SQL_NO_DATA})가 true로 선언하고,
+     * 도메인 코드표도 "찾는 데이터가 없다"를 뜻하는 상태(예: 중간모듈의 DATA_NOT_FOUND)만 true로 재정의할 수 있다.
+     * 연결 장애·시스템 오류 같은 진짜 실패를 true로 만들면 0건 분기에 묻히므로 절대 그러지 않는다.
+     */
+    default boolean noData() {
+        return false;
+    }
 }

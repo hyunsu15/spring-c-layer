@@ -50,7 +50,7 @@ public class ExceptionClassifier {
         } else {
             log.warn("[repo-facade] {}: {}", status, rootMessage(e));
         }
-        return DataResultWrapper.fail(status, rootMessage(e));
+        return DataResultWrapper.fail(status, rootMessage(e), e);
     }
 
     private DataResultStatus statusOf(RuntimeException e) {

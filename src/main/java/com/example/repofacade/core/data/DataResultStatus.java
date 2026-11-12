@@ -37,4 +37,10 @@ public enum DataResultStatus implements ResultStatus {
     public int code() {
         return code;
     }
+
+    /** 이 코드표에서 0건은 SQL_NO_DATA 하나뿐이다. SQLOVF·SQLDISCON 등은 0건이 아니다. */
+    @Override
+    public boolean noData() {
+        return this == SQL_NO_DATA;
+    }
 }
