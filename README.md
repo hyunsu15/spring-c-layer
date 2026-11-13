@@ -4,13 +4,48 @@ Pro*C → Java(Spring + MyBatis) 전환에서 레거시 SQLW 래퍼 자리를 �
 공용 파사드(`RepoFacade`) 하나로 매퍼 호출을 감싸, 예외 대신 `DataResultWrapper<T>`(rc + 값)로 돌려준다.
 목표는 C 개발자가 SQLW 호출 뒤 rc로 분기하던 흐름을 그대로 옮겨 쓰게 하는 것이다.
 
-```
-C     nRet = SelClnt_SDB(&hClnt, &dbClnt, NO_FLAG);
-      if (nRet != SUCCESS) { if (hClnt.sqlw_err == SQL_NO_DATA) { ... } else { ... } }
+## 왜 필요한가
 
-Java  DataResultWrapper<SelClntResult> r = facade.sel(() -> selClntMapper.sel(param));
-      if (r.fail()) { if (r.noData()) { ... } else { ... } }
+기존 전환 코드는 매퍼 호출을 보통 이렇게 감싼다.
+
+```java
+try {
+    CommdaResult res = commdaMapper.sel(param);
+    if (ObjectUtils.isEmpty(res)) { item.setCommdaNm(" "); }       // 0건
+    else { item.setCommdaNm(res.getMdaCodeNm()); }
+} catch (DataAccessException e) {                                  // DB 오류 — 라고 생각하지만
+    throw new BizException("8000", e);
+}
 ```
+
+| 문제 | 실제로 생기는 일 |
+|---|---|
+| `catch (DataAccessException)`이 SQL 버그(컬럼명 오타, 매핑 오류)까지 잡는다 | "고객 없음" 응답, 목록에서 조용히 빠진 계좌로 나온다. 오류 로그도 없다 |
+| 0건 검사를 빠뜨려도 컴파일러가 모른다 | 0건인데 그대로 진행하거나 NPE. C와 다르게 동작한다 |
+| 0건과 장애가 같은 분기에 섞인다 | DB 연결 장애가 "데이터 없음"으로 처리된다 |
+| MyBatis는 2건 이상을 미분류 예외(`MyBatisSystemException`)로 감싼다 | SQLOVF 분기를 옮기려면 cause를 매번 뒤져야 한다 |
+| 분기가 try/catch와 if에 흩어진다 | `.pc` 원본과 줄 단위로 맞대어 보기 어렵다 |
+
+## 빠른 시작
+
+```java
+@Autowired private RepoFacade facade;                 // 공용 빈 1개. 매퍼는 평소처럼 주입
+
+DataResultWrapper<CommdaResult> r = facade.sel(() -> commdaMapper.sel(param));
+if (r.noData()) {                                     // C: sqlw_err == SQL_NO_DATA
+    item.setCommdaNm(" ");
+} else if (r.fail()) {                                // C: 그 외 nRet != SUCCESS
+    throw new BizException("8000", r.cause());        // 사내 프레임워크 예외 자리
+} else {
+    item.setCommdaNm(r.value().getMdaCodeNm());
+}
+```
+
+- SQL 버그는 rc로 바뀌지 않고 그대로 터진다. DB 상태(0건·2건 이상·중복·연결 장애)만 rc가 된다.
+- rc 확인 없이 `value()`를 꺼내면 그 자리에서 터진다 — 엉뚱한 곳의 NPE가 되지 않는다.
+- **0건이 정상인 호출은 `noData()`를 `fail()`보다 먼저 본다.** `valueOr(기본값)`은 장애까지 삼키므로 쓰지 않는다.
+- 실패를 위로 넘길 때는 `r.propagate()`, 새 실패는 `ResultWrapper.fail(...)`, 프레임워크 예외로 바꿀 때는 `r.cause()`를 넘긴다.
+- C의 SELECT INTO 자리는 매퍼를 단건 타입으로 선언하고(2건 이상 → SQLOVF), 단일 컬럼·집계 조회는 SQL에서 NVL로 감싼다.
 
 ## 실행 방법
 
@@ -109,20 +144,7 @@ SQL_NO_DATA다. 회사 고유 예외 타입으로 바꾸는 번역기를 쓴다�
 ### 0건이 정상인 호출
 
 결과가 0건이면 단건·목록 모두 SQL_NO_DATA(실패)다. 페이징 루프의 마지막 페이지, "없으면 공백" 같은 호출은
-`noData()`를 `fail()`보다 **먼저** 본다. 순서를 바꾸면 빈 페이지가 조회 오류가 된다.
-
-```java
-// C: if (nRet != SUCCESS) { if (hSQL.sqlw_err == SQL_NO_DATA) { 공백 } else { 오류 } } else { 값 사용 }
-DataResultWrapper<CommdaRow> r = facade.sel(() -> commdaMapper.sel(param));
-if (r.noData()) {
-    item.setCommdaNm(" ");
-} else if (r.fail()) {
-    throw new BizException("8000", r.cause());   // 사내 프레임워크 예외 자리
-} else {
-    item.setCommdaNm(r.value().getMdaCodeNm());
-}
-```
-
+`noData()`를 `fail()`보다 **먼저** 본다 (예시는 위 "빠른 시작"). 순서를 바꾸면 빈 페이지가 조회 오류가 된다.
 `valueOr(기본값)`으로 0건을 처리하지 않는다 — 연결 장애 같은 진짜 실패까지 기본값으로 삼킨다.
 
 ### 프레임워크 예외로 바꿀 때 — `detail()`과 `cause()`
