@@ -19,5 +19,7 @@
  * <p><b>MyBatis는 예외를 MyBatisSystemException 등으로 감싸서 던진다.</b>
  * TooManyResults와 연결 획득 실패(CannotGetJdbcConnectionException)도 감싸여 오므로 타입이 아니라 cause 체인으로 판별한다
  * ({@link MyBatisExceptionRule}, 그리고 core.data.ExceptionClassifier의 연결 실패 판정).
+ * 2건 이상은 MyBatis 고유 형태(TooManyResultsException — 날것이든 감싸였든)와 스프링 표준 형태
+ * (IncorrectResultSizeDataAccessException — 예외 표준화 번역기를 쓰는 경우)를 모두 SQLOVF로 분류한다.
  */
 package com.example.repofacade.core.data.mybatis;

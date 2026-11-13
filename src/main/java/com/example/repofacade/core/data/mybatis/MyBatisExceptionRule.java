@@ -22,8 +22,10 @@ public class MyBatisExceptionRule implements DataExceptionRule {
 
     @Override
     public DataResultStatus classify(RuntimeException e) {
-        // TooManyResults는 MyBatisSystemException 등에 감싸여 오므로 cause 체인으로 판별
-        //해당값은 표준화 예외를 던지면 이거 필요없음. 해야하면 이거 필요함.
+        // 2건 이상 — MyBatis 고유 형태(TooManyResultsException). 날것으로 오든, mybatis-spring 기본 번역기가
+        // MyBatisSystemException(미분류)으로 감싸 오든, 표준화 번역기가 IncorrectResultSizeDataAccessException의 cause로
+        // 넣어 오든 cause 체인에 남으므로 여기서 잡는다. 이 규칙이 없으면 감싼 형태가 SYSTEM_ERROR가 된다.
+        // 스프링 표준 형태(IncorrectResultSizeDataAccessException)가 그대로 오는 경우는 ExceptionClassifier의 일반 규칙이 잡는다.
         if (DataExceptionRule.hasCause(e, TooManyResultsException.class)) {
             return DataResultStatus.SQLOVF;
         }

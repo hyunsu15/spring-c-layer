@@ -30,7 +30,7 @@ import java.util.Objects;
  *
  * <p>detail은 사람용 실패 설명(C의 sqlw_msg), cause는 rc로 바뀐 원래 예외(없으면 null)다.
  * propagate는 둘 다 그대로 넘기므로, 최상위 서비스가 프레임워크 예외로 바꿀 때 원인을 이을 수 있다
- * ({@code PBOnlineException.create("8000", r.cause())}).
+ * ({@code throw new BizException("8000", r.cause())} — 사내 프레임워크 예외 자리).
  */
 public record ResultWrapper<T>(ResultStatus status, T value, String detail, Throwable cause) {
 

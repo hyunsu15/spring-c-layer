@@ -35,7 +35,7 @@ import com.example.repofacade.core.ResultWrapper;
  *
  * <p><b>detail과 cause는 역할이 다르다.</b> detail은 C의 {@code sqlw_msg} — 모든 실패에 있는 사람용 한 줄.
  * cause는 rc로 바뀐 원래 예외 — DB 예외에서 온 실패에만 있고, 0건(SQL_NO_DATA)처럼 예외 없이 판정된 실패는 null이다.
- * 상위 프레임워크 예외로 바꿀 때 원인을 잇는 용도다: {@code PBOnlineException.create("8000", r.cause())}.
+ * 상위 프레임워크 예외로 바꿀 때 원인을 잇는 용도다: {@code throw new BizException("8000", r.cause())} (사내 프레임워크 예외 자리).
  */
 public final class DataResultWrapper<T> {
 

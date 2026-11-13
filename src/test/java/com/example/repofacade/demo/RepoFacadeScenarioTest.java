@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.apache.ibatis.binding.BindingException;
+import org.apache.ibatis.exceptions.TooManyResultsException;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.apache.ibatis.type.TypeException;
 import org.h2.jdbcx.JdbcDataSource;
@@ -21,12 +22,15 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
+import org.mybatis.spring.MyBatisSystemException;
 import org.mybatis.spring.SqlSessionFactoryBean;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.core.Ordered;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.dao.IncorrectResultSizeDataAccessException;
 import org.springframework.dao.InvalidDataAccessResourceUsageException;
 
 import com.example.repofacade.core.CommonResultStatus;
@@ -91,6 +95,29 @@ class RepoFacadeScenarioTest {
         @DisplayName("selectOne인데 2건 — 감싸진 TooManyResults도 SQLOVF(rc=11)")
         void oneTooMany() {
             assertSame(DataResultStatus.SQLOVF, facade.sel(() -> orderMapper.selectByCustomer("lee")).status());
+        }
+
+        @Test
+        @DisplayName("2건 이상 — MyBatis 형태(TooManyResultsException)는 날것이든 감싸였든 SQLOVF")
+        void tooManyMyBatisForms() {
+            assertSame(DataResultStatus.SQLOVF, statusOfThrown(new TooManyResultsException("날것")));
+            assertSame(DataResultStatus.SQLOVF,
+                    statusOfThrown(new MyBatisSystemException(new TooManyResultsException("기본 번역기"))));
+        }
+
+        @Test
+        @DisplayName("2건 이상 — 스프링 표준 형태(IncorrectResultSizeDataAccessException)도 SQLOVF, 원래 예외 유무와 무관")
+        void tooManySpringStandardForms() {
+            // 예외 표준화 번역기를 쓴 경우 — 원래 예외를 cause로 남기든 버리든
+            assertSame(DataResultStatus.SQLOVF, statusOfThrown(
+                    new IncorrectResultSizeDataAccessException("표준화", 1, new TooManyResultsException("원래"))));
+            assertSame(DataResultStatus.SQLOVF, statusOfThrown(new IncorrectResultSizeDataAccessException(1, 2)));
+        }
+
+        @Test
+        @DisplayName("0건 표준 예외(EmptyResult)는 IncorrectResultSize의 하위 타입이지만 SQLOVF가 아니라 SQL_NO_DATA")
+        void emptyResultIsNoDataNotOverflow() {
+            assertSame(DataResultStatus.SQL_NO_DATA, statusOfThrown(new EmptyResultDataAccessException(1)));
         }
 
         @Test
@@ -466,6 +493,13 @@ class RepoFacadeScenarioTest {
     }
 
     /** 접속 불가 DB에 붙은 매퍼를 만든다 — mybatis-spring의 실제 예외 변환 경로를 그대로 탄다. */
+    /** 데이터 접근 기술이 이 예외를 던졌다고 치고 파사드가 매기는 상태. 분류 대상이 아니면(코드 버그) 그대로 던져진다. */
+    private ResultStatus statusOfThrown(RuntimeException thrown) {
+        return facade.<Object>sel(() -> {
+            throw thrown;
+        }).status();
+    }
+
     private static OrderMapper mapperOnDeadDb() throws Exception {
         JdbcDataSource deadDb = new JdbcDataSource();
         deadDb.setURL("jdbc:h2:tcp://127.0.0.1:1/nope");   // 아무도 듣지 않는 포트
